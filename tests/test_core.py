@@ -1,5 +1,7 @@
 """Integration tests for FFT-based CNR estimation."""
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
@@ -35,7 +37,7 @@ class TestFFTCNR:
         x = rng.normal(0, 1.0, 256)
         result = fft_cnr(x)
         expected_keys = {
-            "N", "window_rms", "cutoff_index", "dof",
+            "N", "window_rms", "dof",
             "welch_nperseg", "welch_noverlap", "kept_bins",
         }
         assert expected_keys.issubset(result.diagnostics.keys())
@@ -257,3 +259,68 @@ class TestPeakMethod:
         result = fft_cnr(x, fit_model="peak")
         assert isinstance(result, CNREstimate)
         assert np.isfinite(result.cnr)
+
+
+class TestEdgeCases:
+    """Tests for edge cases and untested code paths."""
+
+    def test_template_truncation(self):
+        """Template longer than signal should be truncated."""
+        rng = np.random.default_rng(42)
+        N = 256
+        t = np.linspace(0, 1, N, endpoint=False)
+        signal = 5.0 * np.sin(2 * np.pi * 3 * t) + rng.normal(0, 0.5, N)
+        template_long = np.sin(2 * np.pi * 3 * np.linspace(0, 1, N + 100))
+        result = fft_cnr(signal, template=template_long)
+        assert result.diagnostics["amplitude_method"] == "matched_filter"
+        assert np.isfinite(result.cnr)
+
+    def test_template_padding(self):
+        """Template shorter than signal should be zero-padded."""
+        rng = np.random.default_rng(42)
+        N = 256
+        t = np.linspace(0, 1, N, endpoint=False)
+        signal = 5.0 * np.sin(2 * np.pi * 3 * t) + rng.normal(0, 0.5, N)
+        template_short = np.sin(2 * np.pi * 3 * np.linspace(0, 1, N - 50))
+        result = fft_cnr(signal, template=template_short)
+        assert result.diagnostics["amplitude_method"] == "matched_filter"
+        assert np.isfinite(result.cnr)
+
+    def test_generalized_gaussian_fallback(self):
+        """When curve_fit fails, should fall back to peak method."""
+        rng = np.random.default_rng(42)
+        N = 256
+        x = np.arange(N, dtype=float)
+        center = (N - 1) / 2.0
+        signal = 10.0 * np.exp(-0.5 * ((x - center) / 20.0) ** 2)
+        noise = rng.normal(0, 1.0, N)
+        with patch("fft_cnr.core.curve_fit", side_effect=RuntimeError("mock fail")):
+            result = fft_cnr(signal + noise, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+        assert np.isfinite(result.cnr)
+
+    def test_custom_welch_params(self):
+        """Custom Welch parameters should be used and reported."""
+        rng = np.random.default_rng(42)
+        x = rng.normal(0, 1.0, 512)
+        result = fft_cnr(x, welch_nperseg=64, welch_noverlap=32)
+        assert result.diagnostics["welch_nperseg"] == 64
+        assert result.diagnostics["welch_noverlap"] == 32
+        assert np.isfinite(result.cnr)
+
+    def test_minimum_valid_length(self):
+        """Exactly 16 points (the minimum) should produce a valid result."""
+        rng = np.random.default_rng(42)
+        x = rng.normal(0, 1.0, 16)
+        result = fft_cnr(x)
+        assert isinstance(result, CNREstimate)
+        assert np.isfinite(result.noise_rms)
+
+    def test_fallback_cut_frac(self):
+        """When AIC knee detection returns out-of-bounds, fallback should apply."""
+        rng = np.random.default_rng(42)
+        x = rng.normal(0, 1.0, 256)
+        with patch("fft_cnr.core._break_knee_loglog", return_value=0):
+            result = fft_cnr(x, fallback_cut_frac=0.3)
+        assert np.isfinite(result.cnr)
+        assert result.cutoff_index >= 1

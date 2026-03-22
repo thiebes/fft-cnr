@@ -44,14 +44,14 @@ class CNREstimate:
 
 
 def _welch_psd_unitary(
-    xw: np.ndarray, nperseg: int, noverlap: int, win: str = "hann"
+    x: np.ndarray, nperseg: int, noverlap: int, win: str = "hann"
 ) -> tuple[np.ndarray, int]:
     """Unitary Welch PSD estimator with window-energy normalization.
 
     Parameters
     ----------
-    xw : np.ndarray
-        Windowed input signal.
+    x : np.ndarray
+        Demeaned input signal.
     nperseg : int
         Length of each segment.
     noverlap : int
@@ -70,8 +70,8 @@ def _welch_psd_unitary(
     W2 = np.sum(w**2)
     step = nperseg - noverlap
     segs = []
-    for start in range(0, len(xw) - nperseg + 1, step):
-        seg = xw[start : start + nperseg]
+    for start in range(0, len(x) - nperseg + 1, step):
+        seg = x[start : start + nperseg]
         seg = seg * w
         X = np.fft.rfft(seg, norm="ortho")
         P = (np.abs(X) ** 2) * (len(seg) / W2)
@@ -79,7 +79,7 @@ def _welch_psd_unitary(
     Pxx = (
         np.mean(segs, axis=0)
         if segs
-        else np.abs(np.fft.rfft(xw, norm="ortho")) ** 2
+        else np.abs(np.fft.rfft(x, norm="ortho")) ** 2
     )
     dof = 2 * len(segs)
     return Pxx, dof
@@ -283,7 +283,7 @@ def fft_cnr(
         welch_nperseg += welch_nperseg % 2  # ensure even
     if welch_noverlap is None:
         welch_noverlap = welch_nperseg // 2
-    Pxx, dof = _welch_psd_unitary(xw, welch_nperseg, welch_noverlap, win="hann")
+    Pxx, dof = _welch_psd_unitary(x, welch_nperseg, welch_noverlap, win="hann")
 
     # Interpolate Welch PSD to full FFT frequency grid
     nfft_bins = N // 2 + 1
@@ -383,7 +383,6 @@ def fft_cnr(
     diags: dict = {
         "N": N,
         "window_rms": w_rms,
-        "cutoff_index": kc_full,
         "dof": nu,
         "welch_nperseg": welch_nperseg,
         "welch_noverlap": welch_noverlap,
