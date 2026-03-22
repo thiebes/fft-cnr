@@ -1,58 +1,52 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "fft-cnr"
 version = "0.1.0"
-description = "FFT-based Contrast-to-Noise Ratio estimation for 1D signal profiles"
+description = "FFT-based contrast-to-noise ratio estimation from single frames"
 readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
 authors = [
-    {name = "Joseph J. Thiebes", email = "your.email@example.com"}
+    { name = "Joseph J. Thiebes" },
 ]
-license = {text = "MIT"}
+keywords = ["cnr", "fft", "signal-processing", "noise", "measurement"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
-keywords = ["fft", "cnr", "contrast-to-noise-ratio", "signal-processing", "noise-estimation"]
-requires-python = ">=3.8"
 dependencies = [
-    "numpy>=1.20.0",
-    "scipy>=1.7.0",
-    "matplotlib>=3.5.0",
-    "pandas>=1.3.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-]
-viz = [
-    "matplotlib>=3.5.0",
-    "pandas>=1.3.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/fft-cnr"
-Repository = "https://github.com/yourusername/fft-cnr"
-Issues = "https://github.com/yourusername/fft-cnr/issues"
+Repository = "https://github.com/jthiebes/fft-cnr"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fft_cnr"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
 
-[tool.setuptools]
-packages = ["fft_cnr"]
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+validation = [
+    "jupyter>=1.0",
+    "matplotlib>=3.7",
+    "tqdm>=4.60",
+]
