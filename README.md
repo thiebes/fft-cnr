@@ -180,6 +180,17 @@ The implementation in this package has evolved from the method described in
 that paper---the PSD estimation, knee detection, and confidence interval
 machinery differ from the original.
 
+Support for non-Gaussian profiles was motivated by work on excess kurtosis
+in exciton transport:
+
+> E. A. Rodriguez, M. Melendez, J. Cuadra, F. Prins, J. Phys. Chem. Lett.
+> **17**, 2479--2484 (2026). [doi:10.1021/acs.jpclett.5c03961](https://doi.org/10.1021/acs.jpclett.5c03961)
+
+## Acknowledgments
+
+Thanks to Ferry Prins and Enrique Arevalo Rodriguez for discussions on
+non-Gaussian transport profiles that informed the design of this package.
+
 ## License
 
 MIT
