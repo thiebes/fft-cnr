@@ -2,12 +2,13 @@
 
 FFT-based contrast-to-noise ratio estimation from a single frame.
 
-`fft-cnr` measures the contrast-to-noise ratio (CNR) of a 1-D signal profile
-without requiring multiple acquisitions or a separate background region. It
-decomposes the signal into low-frequency (signal) and high-frequency (noise)
-components using a unitary FFT, locates the spectral boundary between the two
-via an information-theoretic criterion (AIC), and returns a CNR estimate with
-a 95% confidence interval.
+Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
+single acquisition---no repeat frames or separate background region needed.
+
+`fft-cnr` decomposes the signal into low-frequency (signal) and high-frequency
+(noise) components using a unitary FFT, locates the spectral boundary between
+the two via an information-theoretic criterion (AIC), and returns a CNR
+estimate with a 95% confidence interval.
 
 ## Installation
 
@@ -35,6 +36,13 @@ print(f"Amplitude: {result.amplitude:.2f}")
 print(f"Noise RMS: {result.noise_rms:.3f}")
 ```
 
+```text
+CNR:       9.8
+CNR 95%CI: (6.9, 12.7)
+Amplitude: 9.74
+Noise RMS: 0.991
+```
+
 ## How it works
 
 1. The input profile is demeaned and tapered (Tukey window by default).
@@ -53,10 +61,10 @@ print(f"Noise RMS: {result.noise_rms:.3f}")
 
 ## Amplitude estimation
 
-By default, `fft_cnr` uses a non-parametric **peak** method that applies a
-spectral low-pass filter (zeroing frequencies above the knee) and reads the
-peak of the smoothed signal. This is robust across arbitrary profile shapes
-and requires no assumptions about the functional form.
+By default (`fit_model=None` or `"peak"`), `fft_cnr` applies a spectral
+low-pass filter (zeroing frequencies above the knee) and reads the peak of the
+smoothed signal. This is robust across arbitrary profile shapes and requires no
+assumptions about the functional form.
 
 Two alternatives are available:
 
@@ -99,7 +107,7 @@ print(result.diagnostics["gaussian_fit_params"])
 | ---------------------- | --------------- | --------------------------------------------------------- |
 | `x` | (required) | 1-D signal array (length >= 16) |
 | `template` | `None` | Noise-free template for matched-filter estimation |
-| `fit_model` | `None` | `"peak"` (default behavior) or `"generalized_gaussian"` |
+| `fit_model` | `None` | Amplitude method: `None`/`"peak"` for spectral low-pass, `"generalized_gaussian"` for parametric fit |
 | `window` | `"tukey"` | Taper window: `"tukey"`, `"hann"`, or `"none"` |
 | `tukey_alpha` | `0.25` | Tukey window shape parameter |
 | `welch_nperseg` | `None` | Welch segment length (defaults to `max(16, N//8)`) |
@@ -107,6 +115,71 @@ print(result.diagnostics["gaussian_fit_params"])
 | `cutoff_guard` | `(0.05, 0.5)` | Fractional bounds for AIC knee search |
 | `fallback_cut_frac` | `0.25` | Fallback knee position if AIC selection fails |
 | `return_bandpassed_noise` | `False` | Include the bandpassed noise array in diagnostics |
+
+## Accuracy
+
+Monte Carlo validation (200 trials per condition, `scripts/validate_accuracy.py`)
+characterizes bias, precision, and confidence interval coverage across five
+signal shapes: Gaussian, heavy-tailed (generalized Gaussian, p=1.5),
+flat-topped (p=4), Gaussian mixture, and Lorentzian.
+
+### Bias
+
+Median estimated-to-true CNR ratio at N=512, by amplitude method:
+
+| Shape | Peak | Gen. Gaussian | Matched filter |
+| ----------------------- | ----------- | ------------- | -------------- |
+| Gaussian | 1.00--1.03 | 1.00--1.01 | 1.00--1.01 |
+| Heavy-tailed (p=1.5) | 0.97--1.00 | 0.99--1.01 | 0.98--1.00 |
+| Flat-topped (p=4) | 0.93--1.10 | 0.93--1.01 | 0.92--1.00 |
+| Gaussian mixture | 0.99--1.01 | 1.12--1.16 | 0.99--1.00 |
+| Lorentzian | 0.98--1.01 | 1.06--1.09 | 0.99--1.00 |
+
+The peak method stays within 3% of the true CNR for most shapes from CNR=5
+upward. The main exception is flat-topped profiles, where the spectral
+low-pass filter rounds off the flat peak (up to 7% positive bias at CNR=3,
+7% negative at CNR=100). The generalized Gaussian fit is accurate when the
+signal is in the model family but introduces 6--16% positive bias on shapes
+outside it (Gaussian mixture, Lorentzian). The matched filter tracks the true
+CNR to within 2% when the template matches the signal shape.
+
+### Profile length
+
+Shorter profiles degrade accuracy. At N=128 (peak method, Gaussian signal),
+the estimator shows 6--8% negative bias at CNR >= 20 because the Welch PSD
+has too few segments for reliable knee detection. N >= 256 is the practical
+minimum for stable estimation.
+
+| N | CNR=5 | CNR=20 | CNR=100 |
+| ------- | --------- | --------- | --------- |
+| 128 | 1.03 | 0.94 | 0.93 |
+| 256 | 1.03 | 1.00 | 1.00 |
+| 512 | 1.01 | 1.01 | 1.00 |
+
+### Precision
+
+Trial-to-trial scatter (relative standard deviation) scales as roughly
+1/sqrt(N): approximately 11% at N=128, 7% at N=256, and 5% at N=512 (peak
+method, CNR=5). Providing a matched template reduces scatter at low CNR.
+
+### Confidence intervals
+
+The 95% confidence intervals contain the true value in 99--100% of trials
+across all tested conditions. The intervals are conservative---wider than
+the nominal 95%---because the chi-squared noise model overestimates
+uncertainty. This means the intervals are reliable but not tight.
+
+## Background
+
+The spectral decomposition approach used here originated in a study of noise
+effects on diffusion coefficient estimation in chemical transport imaging:
+
+> J. Thiebes, J. Chem. Phys. **160**, 124201 (2024).
+> [doi:10.1063/5.0190515](https://doi.org/10.1063/5.0190515)
+
+The implementation in this package has evolved from the method described in
+that paper---the PSD estimation, knee detection, and confidence interval
+machinery differ from the original.
 
 ## License
 
