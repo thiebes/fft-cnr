@@ -173,8 +173,8 @@ uncertainty. This means the intervals are reliable but not tight.
 The spectral decomposition approach used here originated in a study of noise
 effects on diffusion coefficient estimation in chemical transport imaging:
 
-> J. Thiebes, J. Chem. Phys. **160**, 124201 (2024).
-> [doi:10.1063/5.0190515](https://doi.org/10.1063/5.0190515)
+> J. J. Thiebes, E. M. Grumstrup, J. Chem. Phys. **160**, 124201 (2024).
+> [doi:10.1063/5.0190347](https://doi.org/10.1063/5.0190347)
 
 The implementation in this package has evolved from the method described in
 that paper---the PSD estimation, knee detection, and confidence interval
