@@ -145,10 +145,9 @@ CNR to within 2% when the template matches the signal shape.
 
 ### Profile length
 
-Shorter profiles degrade accuracy. At N=128 (peak method, Gaussian signal),
-the estimator shows 6--8% negative bias at CNR >= 20 because the Welch PSD
-has too few segments for reliable knee detection. N >= 256 is the practical
-minimum for stable estimation.
+Shorter profiles reduce accuracy slightly. At N=128 (peak method, Gaussian
+signal), the estimator shows 6--8% negative bias at high CNR because the
+Welch PSD has fewer segments for knee detection.
 
 | N | CNR=5 | CNR=20 | CNR=100 |
 | ------- | --------- | --------- | --------- |
