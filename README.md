@@ -5,10 +5,10 @@ FFT-based contrast-to-noise ratio estimation from a single frame.
 Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
 single acquisition---no repeat frames or separate background region needed.
 
-`fft-cnr` decomposes the signal into low-frequency (signal) and high-frequency
-(noise) components using a unitary FFT, locates the spectral boundary between
-the two via an information-theoretic criterion (AIC), and returns a CNR
-estimate with a 95% confidence interval.
+`fft-cnr` uses the Fourier transform to separate slowly-varying signal features
+from rapid point-to-point noise fluctuations. An automatic model-selection
+criterion (AIC) identifies the frequency boundary between the two, and the
+package returns a CNR estimate with a 95% confidence interval.
 
 ## Installation
 
@@ -45,32 +45,37 @@ Noise RMS: 0.991
 
 ## How it works
 
-1. The input profile is demeaned and tapered (Tukey window by default).
-2. A Welch periodogram estimates the power spectral density, with
-   degree-of-freedom tracking for downstream confidence intervals.
-3. A two-segment least-squares fit in log-log space selects the spectral
-   knee that separates signal power from the noise floor, using AIC to
-   balance goodness of fit against model complexity.
-4. Noise RMS is computed from the inverse FFT of the above-knee frequencies,
-   corrected for window taper and the fraction of retained bins.
+1. The input profile is demeaned and tapered with a window function (Tukey by
+   default) to suppress edge artifacts in the Fourier transform.
+2. The power spectrum is estimated by averaging FFTs of overlapping segments
+   (Welch's method), which produces a smoother estimate than a single FFT. The
+   number of segments determines the degrees of freedom used in confidence
+   interval calculations.
+3. The power spectrum typically shows high power at low frequencies (signal)
+   that levels off to a flat noise floor at higher frequencies. The algorithm
+   finds this transition by fitting two line segments in log-log space and
+   using the Akaike information criterion (AIC) to select the boundary that
+   best balances fit quality against model complexity.
+4. Noise RMS is computed from the inverse FFT of the frequencies above the
+   signal/noise boundary.
 5. Signal amplitude is estimated by one of three methods (see below), and
    CNR = amplitude / noise RMS.
-6. A 95% confidence interval on CNR is computed via the delta method,
-   propagating uncertainty from both the amplitude estimate and the
+6. A 95% confidence interval on CNR is computed by error propagation (delta
+   method), combining uncertainty from the amplitude estimate and the
    chi-squared noise interval.
 
 ## Amplitude estimation
 
-By default (`fit_model=None` or `"peak"`), `fft_cnr` applies a spectral
-low-pass filter (zeroing frequencies above the knee) and reads the peak of the
-smoothed signal. This is robust across arbitrary profile shapes and requires no
-assumptions about the functional form.
+By default (`fit_model=None` or `"peak"`), `fft_cnr` removes the high-frequency
+noise components (by zeroing frequencies above the signal/noise boundary) and
+reads the peak of the resulting smoothed profile. This is robust across
+arbitrary profile shapes and requires no assumptions about the functional form.
 
 Two alternatives are available:
 
 - **Matched filter** (`template` parameter): when a noise-free template of the
-  expected signal shape is available, a whitened matched filter provides the
-  most precise amplitude estimate and standard error.
+  expected signal shape is available, a matched filter weighted by the noise
+  spectrum provides the most precise amplitude estimate and standard error.
 
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that accommodates profiles ranging
@@ -112,8 +117,8 @@ print(result.diagnostics["gaussian_fit_params"])
 | `tukey_alpha` | `0.25` | Tukey window shape parameter |
 | `welch_nperseg` | `None` | Welch segment length (defaults to `max(16, N//8)`) |
 | `welch_noverlap` | `None` | Welch overlap (defaults to `nperseg // 2`) |
-| `cutoff_guard` | `(0.05, 0.5)` | Fractional bounds for AIC knee search |
-| `fallback_cut_frac` | `0.25` | Fallback knee position if AIC selection fails |
+| `cutoff_guard` | `(0.05, 0.5)` | Fractional frequency bounds for signal/noise boundary search |
+| `fallback_cut_frac` | `0.25` | Fallback signal/noise boundary if AIC selection fails |
 | `return_bandpassed_noise` | `False` | Include the bandpassed noise array in diagnostics |
 
 ## Accuracy
