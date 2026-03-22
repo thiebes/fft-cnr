@@ -3,7 +3,7 @@
 FFT-based contrast-to-noise ratio estimation from a single frame.
 
 Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
-single acquisition---no repeat frames or separate background region needed.
+single acquisition—no repeat frames or separate background region needed.
 
 `fft-cnr` uses the Fourier transform to separate slowly-varying signal features
 from rapid point-to-point noise fluctuations. An automatic model-selection
@@ -11,6 +11,14 @@ criterion (AIC) identifies the frequency boundary between the two, and the
 package returns a CNR estimate with a 95% confidence interval.
 
 ## Installation
+
+Requires Python 3.10 or later. If you don't have Python installed,
+[download it from python.org](https://www.python.org/downloads/) and follow
+the installer instructions (on Windows, check "Add Python to PATH" when
+prompted).
+
+Then run this command in a terminal (Command Prompt or PowerShell on Windows,
+Terminal on macOS/Linux):
 
 ```bash
 pip install fft-cnr
@@ -22,7 +30,8 @@ pip install fft-cnr
 import numpy as np
 from fft_cnr import fft_cnr
 
-# Simulate a Gaussian peak with additive white noise
+# Simulate a 1-D intensity profile (e.g., from a microscopy line scan)
+# with additive detector noise
 rng = np.random.default_rng(0)
 x = np.arange(256, dtype=float)
 signal = 10.0 * np.exp(-0.5 * ((x - 127) / 20) ** 2)
@@ -45,17 +54,17 @@ Noise RMS: 0.991
 
 ## How it works
 
-1. The input profile is demeaned and tapered with a window function (Tukey by
-   default) to suppress edge artifacts in the Fourier transform.
-2. The power spectrum is estimated by averaging FFTs of overlapping segments
-   (Welch's method), which produces a smoother estimate than a single FFT. The
-   number of segments determines the degrees of freedom used in confidence
-   interval calculations.
+1. The input profile is mean-subtracted and tapered with a window function
+   (Tukey by default) to suppress edge artifacts in the Fourier transform.
+2. The power spectrum is estimated by averaging FFTs of overlapping segments,
+   which produces a smoother estimate than a single FFT (Welch's method). More
+   segments yield tighter confidence intervals.
 3. The power spectrum typically shows high power at low frequencies (signal)
    that levels off to a flat noise floor at higher frequencies. The algorithm
    finds this transition by fitting two line segments in log-log space and
-   using the Akaike information criterion (AIC) to select the boundary that
-   best balances fit quality against model complexity.
+   using the Akaike information criterion (AIC, a standard metric that
+   penalizes overfitting) to select the boundary that best balances fit
+   quality against model complexity.
 4. Noise RMS is computed from the inverse FFT of the frequencies above the
    signal/noise boundary.
 5. Signal amplitude is estimated by one of three methods (see below), and
@@ -63,6 +72,12 @@ Noise RMS: 0.991
 6. A 95% confidence interval on CNR is computed by error propagation (delta
    method), combining uncertainty from the amplitude estimate and the
    chi-squared noise interval.
+
+The method works best when the signal occupies low frequencies and the noise
+is broadband (approximately white). Profiles shorter than about 64 points
+provide too few spectral bins for reliable knee detection, and signals with
+significant high-frequency content that overlaps the noise band will bias the
+CNR estimate.
 
 ## Amplitude estimation
 
@@ -93,7 +108,8 @@ print(result.diagnostics["gaussian_fit_params"])
 
 ## Return value
 
-`fft_cnr` returns a `CNREstimate` dataclass:
+`fft_cnr` returns a `CNREstimate` dataclass. The first five fields are the
+primary outputs; `cutoff_index` and `diagnostics` are for advanced inspection.
 
 | Field | Type | Description |
 | -------------- | ---------------------- | --------------------------------------------------- |
@@ -107,6 +123,10 @@ print(result.diagnostics["gaussian_fit_params"])
 | `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params |
 
 ## Parameters
+
+Most users will only need `x` (and optionally `template` or `fit_model`). The
+remaining parameters control internal details of the spectral estimation and
+rarely need adjustment.
 
 | Parameter | Default | Description |
 | ---------------------- | --------------- | --------------------------------------------------------- |
@@ -169,8 +189,8 @@ method, CNR=5). Providing a matched template reduces scatter at low CNR.
 ### Confidence intervals
 
 The 95% confidence intervals contain the true value in 99--100% of trials
-across all tested conditions. The intervals are conservative---wider than
-the nominal 95%---because the chi-squared noise model overestimates
+across all tested conditions. The intervals are conservative—wider than
+the nominal 95%—because the chi-squared noise model overestimates
 uncertainty. This means the intervals are reliable but not tight.
 
 ## Background
@@ -182,7 +202,7 @@ effects on diffusion coefficient estimation in chemical transport imaging:
 > [doi:10.1063/5.0190347](https://doi.org/10.1063/5.0190347)
 
 The implementation in this package has evolved from the method described in
-that paper---the PSD estimation, knee detection, and confidence interval
+that paper—the PSD estimation, knee detection, and confidence interval
 machinery differ from the original.
 
 Support for non-Gaussian profiles was motivated by work on excess kurtosis
