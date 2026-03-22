@@ -74,6 +74,20 @@ class TestFFTCNR:
         result = fft_cnr(x)
         assert result.cnr < 10
 
+    def test_default_uses_peak_method(self):
+        """Default call (no template, no fit_model) should use peak method."""
+        rng = np.random.default_rng(42)
+        N = 256
+        x = np.arange(N, dtype=float)
+        center = (N - 1) / 2.0
+        signal = 10.0 * np.exp(-0.5 * ((x - center) / 20.0) ** 2)
+        noise = rng.normal(0, 1.0, N)
+        result = fft_cnr(signal + noise)
+        assert result.diagnostics["amplitude_method"] == "peak"
+        assert np.isfinite(result.amplitude_se)
+        lo, hi = result.cnr_ci95
+        assert np.isfinite(lo) and np.isfinite(hi)
+
     def test_template_matched_filter(self):
         """Matched filter with correct template should recover amplitude."""
         rng = np.random.default_rng(42)
@@ -117,74 +131,11 @@ class TestFFTCNR:
         result = fft_cnr(x)
         assert 1 <= result.cutoff_index <= 512 // 2 + 1
 
-
-class TestGaussianFit:
-    """Tests for the Gaussian fit amplitude estimation path."""
-
-    @staticmethod
-    def _make_gaussian_signal(
-        N=256, amplitude=10.0, sigma=20.0, noise_std=1.0, seed=42
-    ):
-        rng = np.random.default_rng(seed)
-        x = np.arange(N, dtype=float)
-        center = (N - 1) / 2.0
-        clean = amplitude * np.exp(-0.5 * ((x - center) / sigma) ** 2)
-        noise = rng.normal(0, noise_std, N)
-        return clean + noise, clean, amplitude, noise_std
-
-    def test_gaussian_fit_recovers_amplitude(self):
-        signal, _, true_amp, _ = self._make_gaussian_signal()
-        result = fft_cnr(signal, fit_model="gaussian")
-        assert abs(result.amplitude - true_amp) / true_amp < 0.2
-
-    def test_gaussian_fit_has_se(self):
-        signal, _, _, _ = self._make_gaussian_signal()
-        result = fft_cnr(signal, fit_model="gaussian")
-        assert np.isfinite(result.amplitude_se)
-        assert result.amplitude_se > 0
-
-    def test_gaussian_fit_cnr_has_ci(self):
-        signal, _, _, _ = self._make_gaussian_signal()
-        result = fft_cnr(signal, fit_model="gaussian")
-        lo, hi = result.cnr_ci95
-        assert np.isfinite(lo) and np.isfinite(hi)
-        assert lo < hi
-
-    def test_gaussian_fit_pure_noise(self):
-        rng = np.random.default_rng(42)
-        x = rng.normal(0, 1.0, 256)
-        result = fft_cnr(x, fit_model="gaussian")
-        assert isinstance(result, CNREstimate)
-        assert np.isfinite(result.cnr)
-
-    def test_gaussian_fit_diagnostics(self):
-        signal, _, _, _ = self._make_gaussian_signal()
-        result = fft_cnr(signal, fit_model="gaussian")
-        assert result.diagnostics["amplitude_method"] == "gaussian_fit"
-        gp = result.diagnostics["gaussian_fit_params"]
-        assert {"amplitude", "center", "sigma", "baseline"} == set(gp.keys())
-
     def test_invalid_fit_model(self):
         rng = np.random.default_rng(42)
         x = rng.normal(0, 1.0, 256)
         with pytest.raises(ValueError, match="Unsupported fit_model"):
             fft_cnr(x, fit_model="invalid")
-
-    def test_gaussian_fit_agrees_with_template(self):
-        N = 256
-        sigma_g = 20.0
-        signal, clean, true_amp, noise_std = self._make_gaussian_signal(
-            N=N, sigma=sigma_g
-        )
-        x = np.arange(N, dtype=float)
-        center = (N - 1) / 2.0
-        template = np.exp(-0.5 * ((x - center) / sigma_g) ** 2)
-
-        result_mf = fft_cnr(signal, template=template)
-        result_gf = fft_cnr(signal, fit_model="gaussian")
-
-        rel_diff = abs(result_mf.amplitude - result_gf.amplitude) / true_amp
-        assert rel_diff < 0.1
 
 
 class TestGeneralizedGaussianFit:
@@ -203,7 +154,7 @@ class TestGeneralizedGaussianFit:
         return clean + noise, clean, amplitude, noise_std
 
     def test_recovers_amplitude_gaussian_signal(self):
-        """On a standard Gaussian (p=2), should recover amplitude like the 4-param fit."""
+        """On a standard Gaussian (p=2), should recover amplitude within 20%."""
         signal, _, true_amp, _ = self._make_gen_gaussian_signal(p=2.0)
         result = fft_cnr(signal, fit_model="generalized_gaussian")
         assert abs(result.amplitude - true_amp) / true_amp < 0.2

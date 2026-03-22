@@ -127,57 +127,6 @@ def _break_knee_loglog(
     return best_k
 
 
-def _fit_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, dict]:
-    """Fit a Gaussian peak + constant baseline to a 1-D profile.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        Input 1-D profile (original, not demeaned).
-
-    Returns
-    -------
-    amplitude : float
-        Fitted peak height above the baseline (NaN on failure).
-    amplitude_se : float
-        Standard error of the amplitude from the covariance matrix (NaN on failure).
-    fit_params : dict
-        Fitted parameters {amplitude, center, sigma, baseline} (empty on failure).
-    """
-    N = len(x)
-    x_grid = np.arange(N, dtype=float)
-
-    def _gaussian(xg, amplitude, center, sigma, baseline):
-        return amplitude * np.exp(-0.5 * ((xg - center) / sigma) ** 2) + baseline
-
-    baseline_init = float(np.median(x))
-    residual = x - baseline_init
-    peak_idx = int(np.argmax(np.abs(residual)))
-    amplitude_init = float(residual[peak_idx])
-    center_init = float(peak_idx)
-    sigma_init = float(N) / 10.0
-
-    p0 = [amplitude_init, center_init, sigma_init, baseline_init]
-    bounds = (
-        [-np.inf, -0.5 * N, 0.5, -np.inf],
-        [np.inf, 1.5 * N, float(N), np.inf],
-    )
-
-    try:
-        popt, pcov = curve_fit(_gaussian, x_grid, x, p0=p0, bounds=bounds)
-        amplitude = float(popt[0])
-        amplitude_se = float(np.sqrt(pcov[0, 0]))
-        fit_params = {
-            "amplitude": float(popt[0]),
-            "center": float(popt[1]),
-            "sigma": float(popt[2]),
-            "baseline": float(popt[3]),
-        }
-        return amplitude, amplitude_se, fit_params
-    except (RuntimeError, ValueError):
-        return np.nan, np.nan, {}
-
-
 def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, dict]:
     """Fit a generalized Gaussian peak + constant baseline to a 1-D profile.
 
@@ -260,17 +209,17 @@ def fft_cnr(
         Input 1-D signal (e.g., a line profile or spectrum).
     template : np.ndarray or None
         Expected signal shape for matched-filter amplitude estimation.
-        If None, a robust amplitude proxy is used instead.
+        If None, amplitude is estimated using the method specified by
+        ``fit_model`` (default: ``"peak"``).
     fit_model : str or None
-        Parametric model to fit when no template is provided. Supported
-        values: ``"gaussian"`` (4-parameter Gaussian peak + flat baseline),
-        ``"generalized_gaussian"`` (5-parameter generalized Gaussian
-        with a shape exponent that accommodates non-zero excess kurtosis),
-        and ``"peak"`` (non-parametric low-pass filter that zeros noise
-        frequencies and reads the peak from the smoothed signal).
-        All three provide amplitude standard error and CNR confidence
-        intervals without requiring a pre-built template. Ignored when
-        ``template`` is given.
+        Amplitude estimation method when no template is provided.
+        ``"peak"`` (default) applies a spectral low-pass filter and
+        reads the peak from the smoothed signal -- robust across
+        arbitrary profile shapes. ``"generalized_gaussian"`` fits a
+        5-parameter generalized Gaussian with a shape exponent that
+        accommodates non-zero excess kurtosis, providing fitted
+        parameters (center, width, shape) in diagnostics.
+        Ignored when ``template`` is given.
     window : str
         Tapering window: ``"tukey"``, ``"hann"``, or ``"none"``.
     tukey_alpha : float
@@ -306,7 +255,7 @@ def fft_cnr(
     N = x.size
     if N < 16:
         raise ValueError("Profile too short for stable PSD estimation.")
-    _valid_fit_models = {"gaussian", "generalized_gaussian", "peak"}
+    _valid_fit_models = {"generalized_gaussian", "peak"}
     if fit_model is not None and fit_model not in _valid_fit_models:
         raise ValueError(
             f"Unsupported fit_model={fit_model!r}. "
@@ -372,8 +321,7 @@ def fft_cnr(
     upper = (nu * sigma**2) / chi2.ppf(alpha_ci / 2, nu)
     sigma_ci = (np.sqrt(lower), np.sqrt(upper))
 
-    # Whitened matched-filter amplitude
-    amp_method = "proxy"
+    # Amplitude estimation
     gfit_params: dict = {}
     if template is not None:
         t = np.asarray(template, float).ravel()
@@ -393,52 +341,32 @@ def fft_cnr(
         Amp = Ahat
         Amp_se = np.sqrt(Avar)
         amp_method = "matched_filter"
-    elif fit_model == "gaussian":
-        x_raw = x + x_mean
-        Amp, Amp_se, gfit_params = _fit_gaussian_amplitude(x_raw)
-        if np.isnan(Amp):
-            K = max(5, N // 50)
-            Amp = np.median(np.partition(np.abs(x), -K)[-K:])
-            Amp_se = np.nan
-            amp_method = "gaussian_fit_fallback"
-        else:
-            amp_method = "gaussian_fit"
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
         Amp, Amp_se, gfit_params = _fit_generalized_gaussian_amplitude(x_raw)
         if np.isnan(Amp):
-            K = max(5, N // 50)
-            Amp = np.median(np.partition(np.abs(x), -K)[-K:])
-            Amp_se = np.nan
             amp_method = "generalized_gaussian_fit_fallback"
         else:
             amp_method = "generalized_gaussian_fit"
-    elif fit_model == "peak":
-        # Non-parametric peak reading via spectral low-pass filter.
+    else:
+        # Default: non-parametric peak via spectral low-pass filter.
         # FFT the original (pre-window) demeaned signal, zero the noise
         # frequencies, and inverse FFT to get a smoothed signal.  The window
         # used for PSD estimation is not applied here so that the smoothed
         # signal preserves the true peak height.
+        amp_method = "peak"
+
+    if amp_method in ("peak", "generalized_gaussian_fit_fallback"):
         X_raw = np.fft.rfft(x, norm="ortho")
         X_lp = X_raw.copy()
         X_lp[kc_full:] = 0.0
         x_lp = np.fft.irfft(X_lp, n=N, norm="ortho")
-        # Peak of the smoothed demeaned signal, shifted back to original scale
         peak_val = float(np.max(x_lp)) + x_mean
-        # Baseline from the outer quarters of the original signal
         margin = max(1, N // 4)
         x_raw = x + x_mean
         baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
         Amp = peak_val - baseline
-        # Standard error: noise variance at the peak is reduced by the
-        # low-pass filter, which retains kc_full out of nfft_bins bins.
         Amp_se = float(sigma / np.sqrt(max(1, kc_full)))
-        amp_method = "peak"
-    else:
-        # Robust amplitude proxy (no template)
-        K = max(5, N // 50)
-        Amp = np.median(np.partition(np.abs(x), -K)[-K:])
-        Amp_se = np.nan
 
     # CNR and confidence interval (delta-method)
     cnr_val = np.inf if sigma == 0 else float(np.abs(Amp) / sigma)
