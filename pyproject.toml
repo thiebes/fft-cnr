@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/jthiebes/fft-cnr"
+Repository = "https://github.com/thiebes/fft-cnr"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fft_cnr"]
