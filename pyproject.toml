@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fft-cnr"
-version = "0.1.0"
+version = "0.1.1"
 description = "FFT-based contrast-to-noise ratio estimation from single frames"
 readme = "README.md"
 license = "MIT"
