@@ -363,3 +363,30 @@ class TestGridConsistencyRegression:
         noisy, clean = self._fixed_signal()
         result = fft_cnr(noisy, template=clean)
         assert result.cutoff_index == 24
+
+    def test_matched_filter_values(self):
+        noisy, clean = self._fixed_signal()
+        result = fft_cnr(noisy, template=clean)
+        assert result.cnr == pytest.approx(0.98003, rel=1e-4)
+        assert result.amplitude == pytest.approx(0.99181, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+
+    def test_generalized_gaussian_values(self):
+        noisy, _ = self._fixed_signal()
+        result = fft_cnr(noisy, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert result.cutoff_index == 24
+        assert result.cnr == pytest.approx(19.7954, rel=1e-4)
+        assert result.amplitude == pytest.approx(20.0333, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+
+    def test_noise_rms_independent_of_amplitude_method(self):
+        """The noise path never branches on the amplitude method, so all
+        three methods must report the exact same noise RMS."""
+        noisy, clean = self._fixed_signal()
+        rms_values = {
+            fft_cnr(noisy).noise_rms,
+            fft_cnr(noisy, template=clean).noise_rms,
+            fft_cnr(noisy, fit_model="generalized_gaussian").noise_rms,
+        }
+        assert len(rms_values) == 1
