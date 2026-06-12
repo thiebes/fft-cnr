@@ -5,7 +5,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from fft_cnr import CNREstimate, fft_cnr
+from fft_cnr import CNREstimate, NoiseModel, fft_cnr
 
 
 class TestFFTCNR:
@@ -390,3 +390,36 @@ class TestGridConsistencyRegression:
             fft_cnr(noisy, fit_model="generalized_gaussian").noise_rms,
         }
         assert len(rms_values) == 1
+
+
+class TestNoiseModel:
+    """Tests for the NoiseModel scaffolding (detectors not yet implemented)."""
+
+    def test_noise_model_none_until_detectors_run(self):
+        rng = np.random.default_rng(42)
+        result = fft_cnr(rng.normal(0, 1.0, 256))
+        assert result.noise_model is None
+
+    def test_peak_snr_pure_shot_noise(self):
+        """With no read floor, peak SNR reduces to sqrt(amplitude / gain)."""
+        model = NoiseModel(
+            read=0.0,
+            gain=0.01,
+            spectral_exponent=float("nan"),
+            white_floor=float("nan"),
+            signal_dependent=True,
+            correlated=None,
+        )
+        assert model.peak_snr(100.0) == pytest.approx(100.0)
+
+    def test_peak_snr_pure_read_noise(self):
+        """With zero gain, peak SNR reduces to amplitude / read."""
+        model = NoiseModel(
+            read=2.0,
+            gain=0.0,
+            spectral_exponent=float("nan"),
+            white_floor=float("nan"),
+            signal_dependent=False,
+            correlated=None,
+        )
+        assert model.peak_snr(10.0) == pytest.approx(5.0)

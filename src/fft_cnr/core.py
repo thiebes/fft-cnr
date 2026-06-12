@@ -10,6 +10,50 @@ from scipy.stats import chi2
 
 
 @dataclass
+class NoiseModel:
+    """Estimated structure of the noise, beyond a single RMS level.
+
+    Characterizes the noise along two orthogonal axes. The real-space axis
+    (``read``, ``gain``) captures signal-dependent noise via the
+    photon-transfer relation ``var = gain * signal + read**2``. The spectral
+    axis (``spectral_exponent``, ``white_floor``) captures spatially
+    correlated noise via a ``1/f**b`` power-law fit to the noise band.
+    White, signal-independent noise is the degenerate case of both axes:
+    zero gain, zero spectral exponent.
+
+    Numeric fields are NaN and flags are None until the corresponding
+    detector has run, so "not tested" is distinguishable from "tested, not
+    significant".
+
+    Attributes
+    ----------
+    read : float
+        Read-noise floor (intercept of the var-vs-signal fit).
+    gain : float
+        Photon-transfer slope (var-vs-signal).
+    spectral_exponent : float
+        Noise-band power-law exponent (0 = white).
+    white_floor : float
+        White noise level from the noise-band fit.
+    signal_dependent : bool or None
+        Whether the gain is significantly above the pipeline null.
+    correlated : bool or None
+        Whether the spectral slope is significantly above the pipeline null.
+    """
+
+    read: float
+    gain: float
+    spectral_exponent: float
+    white_floor: float
+    signal_dependent: bool | None
+    correlated: bool | None
+
+    def peak_snr(self, amplitude: float) -> float:
+        """Peak signal-to-noise ratio under the fitted real-space noise model."""
+        return float(amplitude / np.sqrt(self.gain * amplitude + self.read**2))
+
+
+@dataclass
 class CNREstimate:
     """Result of an FFT-based CNR estimation.
 
@@ -31,6 +75,8 @@ class CNREstimate:
         Spectral index separating signal from noise.
     diagnostics : dict
         Additional diagnostic information.
+    noise_model : NoiseModel or None
+        Estimated noise structure, or None when no detector has run.
     """
 
     cnr: float
@@ -41,6 +87,7 @@ class CNREstimate:
     noise_ci95: tuple[float, float]
     cutoff_index: int
     diagnostics: dict
+    noise_model: NoiseModel | None = None
 
 
 def _welch_psd_unitary(
@@ -321,6 +368,17 @@ def fft_cnr(
     upper = (nu * sigma**2) / chi2.ppf(alpha_ci / 2, nu)
     sigma_ci = (np.sqrt(lower), np.sqrt(upper))
 
+    # Low-pass reconstruction of the signal via spectral low-pass filter:
+    # FFT the original (pre-window) demeaned signal, zero the noise
+    # frequencies, and inverse FFT.  The window used for PSD estimation is
+    # not applied here so that the reconstruction preserves the true peak
+    # height.  Computed for every amplitude method: the peak method reads
+    # its peak from it, and the noise-model detectors bin the
+    # high-frequency residual by it.
+    X_lp = np.fft.rfft(x, norm="ortho")
+    X_lp[kc_full:] = 0.0
+    x_lp = np.fft.irfft(X_lp, n=N, norm="ortho")
+
     # Amplitude estimation
     gfit_params: dict = {}
     if template is not None:
@@ -349,18 +407,10 @@ def fft_cnr(
         else:
             amp_method = "generalized_gaussian_fit"
     else:
-        # Default: non-parametric peak via spectral low-pass filter.
-        # FFT the original (pre-window) demeaned signal, zero the noise
-        # frequencies, and inverse FFT to get a smoothed signal.  The window
-        # used for PSD estimation is not applied here so that the smoothed
-        # signal preserves the true peak height.
+        # Default: non-parametric peak read from the low-pass reconstruction.
         amp_method = "peak"
 
     if amp_method in ("peak", "generalized_gaussian_fit_fallback"):
-        X_raw = np.fft.rfft(x, norm="ortho")
-        X_lp = X_raw.copy()
-        X_lp[kc_full:] = 0.0
-        x_lp = np.fft.irfft(X_lp, n=N, norm="ortho")
         peak_val = float(np.max(x_lp)) + x_mean
         margin = max(1, N // 4)
         x_raw = x + x_mean
