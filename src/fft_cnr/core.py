@@ -1,6 +1,7 @@
 """Core FFT-based CNR estimation routines."""
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 from scipy.optimize import curve_fit
@@ -174,6 +175,134 @@ def _break_knee_loglog(
     return best_k
 
 
+class _SpectralDecomposition(NamedTuple):
+    """Signal/noise band split of a profile: steps 1-4 of the fft_cnr pipeline.
+
+    Shared by fft_cnr and the noise-model null calibration so that observed
+    and null statistics travel the identical path.
+    """
+
+    x: np.ndarray  # demeaned input
+    x_mean: float  # subtracted mean (physical offset)
+    w: np.ndarray  # taper window
+    w_rms: float
+    X: np.ndarray  # unitary rFFT of the tapered signal
+    Pxx_full: np.ndarray  # Welch PSD interpolated to the full rFFT grid
+    welch_nperseg: int  # resolved segment length
+    welch_noverlap: int  # resolved overlap
+    kc_full: int  # signal/noise knee index on the full grid
+    x_bp: np.ndarray  # high-frequency residual of the tapered signal
+    kept: int  # noise-band bin count
+    frac_kept: float  # noise-band fraction (shared attenuation convention)
+    nu: int  # chi-squared degrees of freedom for the noise CI
+    sigma: float  # noise RMS
+    sigma_ci: tuple[float, float]
+    x_lp: np.ndarray  # low-pass reconstruction (pre-window signal estimate)
+
+
+def _spectral_decomposition(
+    x: np.ndarray,
+    *,
+    window: str,
+    tukey_alpha: float,
+    welch_nperseg: int | None,
+    welch_noverlap: int | None,
+    cutoff_guard: tuple[float, float],
+    fallback_cut_frac: float,
+) -> _SpectralDecomposition:
+    """Detrend, taper, estimate the PSD, locate the knee, and split bands."""
+    N = x.size
+
+    # Detrend and taper
+    x_mean = float(np.mean(x))
+    x = x - x_mean
+    if window == "tukey":
+        w = tukey(N, alpha=tukey_alpha)
+    elif window == "hann":
+        w = get_window("hann", N, fftbins=True)
+    else:
+        w = np.ones(N)
+    xw = x * w
+    w_rms = np.sqrt(np.mean(w**2))
+
+    # Unitary rFFT
+    X = np.fft.rfft(xw, norm="ortho")
+
+    # Welch PSD (unitary)
+    if welch_nperseg is None:
+        welch_nperseg = max(16, int(N // 8))
+        welch_nperseg += welch_nperseg % 2  # ensure even
+    if welch_noverlap is None:
+        welch_noverlap = welch_nperseg // 2
+    Pxx, dof = _welch_psd_unitary(x, welch_nperseg, welch_noverlap, win="hann")
+
+    # Interpolate Welch PSD to full FFT frequency grid
+    nfft_bins = N // 2 + 1
+    if len(Pxx) != nfft_bins:
+        welch_freqs = np.linspace(0, 1, len(Pxx))
+        full_freqs = np.linspace(0, 1, nfft_bins)
+        Pxx_full = np.interp(full_freqs, welch_freqs, Pxx)
+    else:
+        Pxx_full = Pxx
+
+    # Knee (cutoff) with guardrails
+    kc = _break_knee_loglog(Pxx, guard=cutoff_guard)
+    if not (1 <= kc <= len(Pxx) - 1):
+        kc = max(1, int(fallback_cut_frac * (len(Pxx) - 1)))
+    # Scale cutoff index to full FFT grid
+    kc_full = int(round(kc * (nfft_bins - 1) / (len(Pxx) - 1)))
+    kc_full = max(1, min(kc_full, nfft_bins - 1))
+
+    # Noise RMS via bandpass iFFT
+    X_bp = X.copy()
+    X_bp[:kc_full] = 0.0
+    x_bp = np.fft.irfft(X_bp, n=N, norm="ortho")
+    kept = max(1, len(X_bp) - kc_full)
+    frac_kept = kept / max(1, nfft_bins)
+    sigma = float(
+        np.sqrt(np.mean(x_bp**2))
+        / ((w_rms * np.sqrt(frac_kept)) if w_rms > 0 else 1.0)
+    )
+
+    # Confidence interval for sigma via Welch degrees of freedom
+    frac = kept / max(1, len(X_bp))
+    nu = max(2, int(dof * frac))
+    alpha_ci = 0.05
+    lower = (nu * sigma**2) / chi2.ppf(1 - alpha_ci / 2, nu)
+    upper = (nu * sigma**2) / chi2.ppf(alpha_ci / 2, nu)
+    sigma_ci = (np.sqrt(lower), np.sqrt(upper))
+
+    # Low-pass reconstruction of the signal via spectral low-pass filter:
+    # FFT the original (pre-window) demeaned signal, zero the noise
+    # frequencies, and inverse FFT.  The window used for PSD estimation is
+    # not applied here so that the reconstruction preserves the true peak
+    # height.  Computed for every amplitude method: the peak method reads
+    # its peak from it, and the noise-model detectors bin the
+    # high-frequency residual by it.
+    X_lp = np.fft.rfft(x, norm="ortho")
+    X_lp[kc_full:] = 0.0
+    x_lp = np.fft.irfft(X_lp, n=N, norm="ortho")
+
+    return _SpectralDecomposition(
+        x=x,
+        x_mean=x_mean,
+        w=w,
+        w_rms=w_rms,
+        X=X,
+        Pxx_full=Pxx_full,
+        welch_nperseg=welch_nperseg,
+        welch_noverlap=welch_noverlap,
+        kc_full=kc_full,
+        x_bp=x_bp,
+        kept=kept,
+        frac_kept=frac_kept,
+        nu=nu,
+        sigma=sigma,
+        sigma_ci=sigma_ci,
+        x_lp=x_lp,
+    )
+
+
 def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, dict]:
     """Fit a generalized Gaussian peak + constant baseline to a 1-D profile.
 
@@ -309,75 +438,24 @@ def fft_cnr(
             f"Supported values: {sorted(_valid_fit_models)}."
         )
 
-    # Detrend and taper
-    x_mean = float(np.mean(x))
-    x = x - x_mean
-    if window == "tukey":
-        w = tukey(N, alpha=tukey_alpha)
-    elif window == "hann":
-        w = get_window("hann", N, fftbins=True)
-    else:
-        w = np.ones(N)
-    xw = x * w
-    w_rms = np.sqrt(np.mean(w**2))
-
-    # Unitary rFFT
-    X = np.fft.rfft(xw, norm="ortho")
-
-    # Welch PSD (unitary)
-    if welch_nperseg is None:
-        welch_nperseg = max(16, int(N // 8))
-        welch_nperseg += welch_nperseg % 2  # ensure even
-    if welch_noverlap is None:
-        welch_noverlap = welch_nperseg // 2
-    Pxx, dof = _welch_psd_unitary(x, welch_nperseg, welch_noverlap, win="hann")
-
-    # Interpolate Welch PSD to full FFT frequency grid
-    nfft_bins = N // 2 + 1
-    if len(Pxx) != nfft_bins:
-        welch_freqs = np.linspace(0, 1, len(Pxx))
-        full_freqs = np.linspace(0, 1, nfft_bins)
-        Pxx_full = np.interp(full_freqs, welch_freqs, Pxx)
-    else:
-        Pxx_full = Pxx
-
-    # Knee (cutoff) with guardrails
-    kc = _break_knee_loglog(Pxx, guard=cutoff_guard)
-    if not (1 <= kc <= len(Pxx) - 1):
-        kc = max(1, int(fallback_cut_frac * (len(Pxx) - 1)))
-    # Scale cutoff index to full FFT grid
-    kc_full = int(round(kc * (nfft_bins - 1) / (len(Pxx) - 1)))
-    kc_full = max(1, min(kc_full, nfft_bins - 1))
-
-    # Noise RMS via bandpass iFFT
-    X_bp = X.copy()
-    X_bp[:kc_full] = 0.0
-    x_bp = np.fft.irfft(X_bp, n=N, norm="ortho")
-    kept = max(1, len(X_bp) - kc_full)
-    frac_kept = kept / max(1, nfft_bins)
-    sigma = float(
-        np.sqrt(np.mean(x_bp**2))
-        / ((w_rms * np.sqrt(frac_kept)) if w_rms > 0 else 1.0)
+    d = _spectral_decomposition(
+        x,
+        window=window,
+        tukey_alpha=tukey_alpha,
+        welch_nperseg=welch_nperseg,
+        welch_noverlap=welch_noverlap,
+        cutoff_guard=cutoff_guard,
+        fallback_cut_frac=fallback_cut_frac,
     )
-
-    # Confidence interval for sigma via Welch degrees of freedom
-    frac = kept / max(1, len(X_bp))
-    nu = max(2, int(dof * frac))
-    alpha_ci = 0.05
-    lower = (nu * sigma**2) / chi2.ppf(1 - alpha_ci / 2, nu)
-    upper = (nu * sigma**2) / chi2.ppf(alpha_ci / 2, nu)
-    sigma_ci = (np.sqrt(lower), np.sqrt(upper))
-
-    # Low-pass reconstruction of the signal via spectral low-pass filter:
-    # FFT the original (pre-window) demeaned signal, zero the noise
-    # frequencies, and inverse FFT.  The window used for PSD estimation is
-    # not applied here so that the reconstruction preserves the true peak
-    # height.  Computed for every amplitude method: the peak method reads
-    # its peak from it, and the noise-model detectors bin the
-    # high-frequency residual by it.
-    X_lp = np.fft.rfft(x, norm="ortho")
-    X_lp[kc_full:] = 0.0
-    x_lp = np.fft.irfft(X_lp, n=N, norm="ortho")
+    x = d.x
+    x_mean = d.x_mean
+    w = d.w
+    X = d.X
+    Pxx_full = d.Pxx_full
+    kc_full = d.kc_full
+    sigma = d.sigma
+    sigma_ci = d.sigma_ci
+    x_lp = d.x_lp
 
     # Amplitude estimation
     gfit_params: dict = {}
@@ -432,17 +510,17 @@ def fft_cnr(
 
     diags: dict = {
         "N": N,
-        "window_rms": w_rms,
-        "dof": nu,
-        "welch_nperseg": welch_nperseg,
-        "welch_noverlap": welch_noverlap,
-        "kept_bins": kept,
+        "window_rms": d.w_rms,
+        "dof": d.nu,
+        "welch_nperseg": d.welch_nperseg,
+        "welch_noverlap": d.welch_noverlap,
+        "kept_bins": d.kept,
         "amplitude_method": amp_method,
     }
     if gfit_params:
         diags["gaussian_fit_params"] = gfit_params
     if return_bandpassed_noise:
-        diags["x_bp"] = x_bp
+        diags["x_bp"] = d.x_bp
 
     return CNREstimate(
         cnr=cnr_val,
