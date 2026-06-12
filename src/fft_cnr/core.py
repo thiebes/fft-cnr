@@ -303,6 +303,118 @@ def _spectral_decomposition(
     )
 
 
+def _fit_photon_transfer(
+    signal_estimate: np.ndarray, residual: np.ndarray, frac_kept: float
+) -> tuple[float, float]:
+    """Fit var = gain * signal + read**2 to per-pixel squared residuals.
+
+    The residual carries only the noise power above the spectral cutoff, so
+    the raw slope and intercept are attenuated by the kept band fraction;
+    both are corrected with the same ``frac_kept`` convention the noise RMS
+    estimate uses, which keeps the two estimators consistent (under white
+    noise the corrected intercept matches the squared noise RMS).
+
+    Returns
+    -------
+    gain : float
+        Photon-transfer slope (var-vs-signal).
+    read2 : float
+        Squared read-noise floor (intercept; may be negative from noise).
+    """
+    A = np.vstack([signal_estimate, np.ones_like(signal_estimate)]).T
+    slope, intercept = np.linalg.lstsq(A, residual**2, rcond=None)[0]
+    return float(slope / frac_kept), float(intercept / frac_kept)
+
+
+def _estimate_noise_model(
+    decomp: _SpectralDecomposition,
+    rng: np.random.Generator | None,
+    *,
+    window: str,
+    tukey_alpha: float,
+    cutoff_guard: tuple[float, float],
+    fallback_cut_frac: float,
+) -> tuple[NoiseModel, dict]:
+    """Estimate the real-space noise model and test for signal dependence.
+
+    Fits the photon-transfer relation to the estimator's own residual, then
+    calibrates the significance of the fitted gain against a null built by
+    adding white noise at the estimated RMS to the reconstructed signal and
+    re-running the full spectral decomposition.  The null travels the same
+    path as the observed statistic, so signal-curvature leakage into the
+    residual, filter-induced correlation, and knee-placement jitter are all
+    represented in the null distribution rather than assumed away.
+
+    Spectral-axis fields stay NaN/None; they belong to the correlated-noise
+    detector.
+
+    Returns
+    -------
+    model : NoiseModel
+        Real-space fields populated, or all-NaN/None when the signal range
+        cannot constrain the fit.
+    diags : dict
+        Detector diagnostics to merge into the result diagnostics:
+        ``var_signal_p`` (rank p-value of the gain against the null) or
+        ``noise_model_skipped`` (reason the fit was not attempted).
+    """
+    n_null = 199
+    test_level = 0.05
+    min_range_in_sigmas = 3.0
+    if rng is None:
+        rng = np.random.default_rng(0)
+
+    signal_estimate = decomp.x_lp + decomp.x_mean
+    residual = decomp.x - decomp.x_lp
+
+    if float(np.ptp(signal_estimate)) < min_range_in_sigmas * decomp.sigma:
+        model = NoiseModel(
+            read=float("nan"),
+            gain=float("nan"),
+            spectral_exponent=float("nan"),
+            white_floor=float("nan"),
+            signal_dependent=None,
+            correlated=None,
+        )
+        reason = (
+            "signal range too small relative to the noise to constrain "
+            "the var-vs-signal slope"
+        )
+        return model, {"noise_model_skipped": reason}
+
+    gain, read2 = _fit_photon_transfer(
+        signal_estimate, residual, decomp.frac_kept
+    )
+
+    N = decomp.x.size
+    null_gains = np.empty(n_null)
+    for i in range(n_null):
+        y = signal_estimate + rng.normal(0.0, decomp.sigma, N)
+        d = _spectral_decomposition(
+            y,
+            window=window,
+            tukey_alpha=tukey_alpha,
+            welch_nperseg=decomp.welch_nperseg,
+            welch_noverlap=decomp.welch_noverlap,
+            cutoff_guard=cutoff_guard,
+            fallback_cut_frac=fallback_cut_frac,
+        )
+        null_gains[i], _ = _fit_photon_transfer(
+            d.x_lp + d.x_mean, d.x - d.x_lp, d.frac_kept
+        )
+
+    p_value = float((1 + np.sum(null_gains >= gain)) / (n_null + 1))
+    model = NoiseModel(
+        read=float(np.sqrt(max(0.0, read2))),
+        gain=gain,
+        spectral_exponent=float("nan"),
+        white_floor=float("nan"),
+        signal_dependent=bool(p_value <= test_level),
+        correlated=None,
+    )
+    return model, {"var_signal_p": p_value}
+
+
 def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, dict]:
     """Fit a generalized Gaussian peak + constant baseline to a 1-D profile.
 
@@ -372,6 +484,8 @@ def fft_cnr(
     cutoff_guard: tuple[float, float] = (0.05, 0.5),
     fallback_cut_frac: float = 0.25,
     return_bandpassed_noise: bool = False,
+    estimate_noise_model: bool = False,
+    rng: np.random.Generator | None = None,
 ) -> CNREstimate:
     """Estimate contrast-to-noise ratio from a single 1-D profile using FFT methods.
 
@@ -415,6 +529,18 @@ def fft_cnr(
         Fallback cutoff fraction if AIC selection fails.
     return_bandpassed_noise : bool
         If True, include the bandpassed noise array in diagnostics.
+    estimate_noise_model : bool
+        If True, fit the photon-transfer relation (var = gain * signal +
+        read**2) to the residual, test the fitted gain for significance
+        against a null calibrated through this same pipeline, and attach
+        the result as ``noise_model``.  Works with every amplitude method.
+        Adds a Monte Carlo cost of about 200 re-runs of the spectral
+        decomposition.
+    rng : numpy.random.Generator or None
+        Random generator for the noise-model null calibration.  None
+        (default) uses a fixed seed, so repeated calls on the same input
+        give identical results; pass a Generator for independent draws.
+        Unused unless ``estimate_noise_model`` is True.
 
     Returns
     -------
@@ -456,6 +582,18 @@ def fft_cnr(
     sigma = d.sigma
     sigma_ci = d.sigma_ci
     x_lp = d.x_lp
+
+    noise_model = None
+    noise_model_diags: dict = {}
+    if estimate_noise_model:
+        noise_model, noise_model_diags = _estimate_noise_model(
+            d,
+            rng,
+            window=window,
+            tukey_alpha=tukey_alpha,
+            cutoff_guard=cutoff_guard,
+            fallback_cut_frac=fallback_cut_frac,
+        )
 
     # Amplitude estimation
     gfit_params: dict = {}
@@ -521,6 +659,7 @@ def fft_cnr(
         diags["gaussian_fit_params"] = gfit_params
     if return_bandpassed_noise:
         diags["x_bp"] = d.x_bp
+    diags.update(noise_model_diags)
 
     return CNREstimate(
         cnr=cnr_val,
@@ -531,4 +670,5 @@ def fft_cnr(
         noise_ci95=sigma_ci,
         cutoff_index=kc_full,
         diagnostics=diags,
+        noise_model=noise_model,
     )

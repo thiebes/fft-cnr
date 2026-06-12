@@ -393,9 +393,9 @@ class TestGridConsistencyRegression:
 
 
 class TestNoiseModel:
-    """Tests for the NoiseModel scaffolding (detectors not yet implemented)."""
+    """Tests for the NoiseModel dataclass and its derived quantities."""
 
-    def test_noise_model_none_until_detectors_run(self):
+    def test_noise_model_none_by_default(self):
         rng = np.random.default_rng(42)
         result = fft_cnr(rng.normal(0, 1.0, 256))
         assert result.noise_model is None
@@ -423,3 +423,106 @@ class TestNoiseModel:
             correlated=None,
         )
         assert model.peak_snr(10.0) == pytest.approx(5.0)
+
+
+class TestNoiseModelDetection:
+    """Tests for the real-space (signal-dependence) noise-model detector."""
+
+    @staticmethod
+    def _white_noise_signal():
+        rng = np.random.default_rng(20240611)
+        N = 512
+        x = np.arange(N, dtype=float)
+        center = (N - 1) / 2.0
+        clean = 20.0 * np.exp(-0.5 * ((x - center) / 25.0) ** 2)
+        return clean + rng.normal(0, 1.0, N), clean
+
+    @staticmethod
+    def _shot_noise_signal(seed=7):
+        """Poisson profile whose peak holds 100 photons, so in count units
+        the true photon-transfer gain is 1.0 with no read floor and the
+        true peak SNR is 10 (the issue #1 construction)."""
+        N = 512
+        x = np.arange(N, dtype=float)
+        center = (N - 1) / 2.0
+        lam = 100.0 * np.exp(-0.5 * ((x - center) / 25.0) ** 2) + 1e-9
+        return np.random.default_rng(seed).poisson(lam).astype(float)
+
+    def test_white_noise_not_flagged(self):
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy, estimate_noise_model=True)
+        model = result.noise_model
+        assert model.signal_dependent is False
+        assert model.correlated is None
+        assert np.isnan(model.spectral_exponent)
+        assert np.isnan(model.white_floor)
+
+    def test_white_noise_read_matches_noise_rms(self):
+        """Under white noise the photon-transfer intercept and the spectral
+        noise estimate measure the same quantity; the shared frac_kept
+        attenuation convention is what keeps them consistent."""
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy, estimate_noise_model=True)
+        assert result.noise_model.read == pytest.approx(
+            result.noise_rms, rel=0.05
+        )
+
+    def test_white_noise_pinned_values(self):
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy, estimate_noise_model=True)
+        assert result.noise_model.gain == pytest.approx(-0.0227155, rel=1e-4)
+        assert result.noise_model.read == pytest.approx(1.0201, rel=1e-4)
+        assert result.diagnostics["var_signal_p"] == pytest.approx(0.98)
+
+    def test_shot_noise_flagged_and_gain_recovered(self):
+        x = self._shot_noise_signal()
+        result = fft_cnr(x, estimate_noise_model=True)
+        model = result.noise_model
+        assert model.signal_dependent is True
+        assert 0.5 < model.gain < 1.5
+        assert model.read < 0.5
+
+    def test_shot_noise_peak_snr(self):
+        """peak_snr from the fitted model should land near the true peak SNR
+        of 10, while the spectral cnr overestimates it severalfold."""
+        x = self._shot_noise_signal()
+        result = fft_cnr(x, estimate_noise_model=True)
+        snr = result.noise_model.peak_snr(result.amplitude)
+        assert 7.0 < snr < 14.0
+        assert result.cnr > 2.0 * snr
+
+    def test_deterministic_by_default(self):
+        noisy, _ = self._white_noise_signal()
+        a = fft_cnr(noisy, estimate_noise_model=True)
+        b = fft_cnr(noisy, estimate_noise_model=True)
+        assert a.noise_model.gain == b.noise_model.gain
+        assert a.noise_model.read == b.noise_model.read
+        assert a.diagnostics["var_signal_p"] == b.diagnostics["var_signal_p"]
+
+    def test_weak_signal_skipped(self):
+        """A profile whose signal range cannot constrain the slope is
+        reported as not tested (None/NaN), not as tested-negative."""
+        rng = np.random.default_rng(3)
+        N = 512
+        x = np.arange(N, dtype=float)
+        weak = 1.5 * np.exp(-0.5 * ((x - (N - 1) / 2.0) / 25.0) ** 2)
+        result = fft_cnr(
+            weak + rng.normal(0, 1.0, N), estimate_noise_model=True
+        )
+        model = result.noise_model
+        assert model.signal_dependent is None
+        assert np.isnan(model.gain)
+        assert np.isnan(model.read)
+        assert "noise_model_skipped" in result.diagnostics
+
+    def test_works_with_template_path(self):
+        noisy, clean = self._white_noise_signal()
+        result = fft_cnr(noisy, template=clean, estimate_noise_model=True)
+        assert result.noise_model is not None
+        assert result.noise_model.signal_dependent is False
+
+    def test_default_path_unaffected(self):
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy)
+        assert result.noise_model is None
+        assert "var_signal_p" not in result.diagnostics
