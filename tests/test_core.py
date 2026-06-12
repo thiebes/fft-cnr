@@ -324,3 +324,42 @@ class TestEdgeCases:
             result = fft_cnr(x, fallback_cut_frac=0.3)
         assert np.isfinite(result.cnr)
         assert result.cutoff_index >= 1
+
+
+class TestGridConsistencyRegression:
+    """Pin numerical outputs on a fixed signal to catch silent regressions.
+
+    The estimation pipeline bridges two frequency grids: knee detection and
+    the noise CI run on the coarse Welch PSD grid, while noise extraction and
+    amplitude run on the full rFFT grid. The Welch PSD is interpolated to the
+    full grid and the knee index is separately scaled across grids. A mismatch
+    in those conversions would shift the signal/noise boundary and bias the
+    result without changing any output's shape or type, so the structural
+    tests above would not catch it. These values are deterministic (fixed seed,
+    no randomness in the algorithm); a change here flags that the estimation
+    math moved and must be re-validated with scripts/compare_cnr_accuracy.py.
+    """
+
+    @staticmethod
+    def _fixed_signal():
+        rng = np.random.default_rng(20240611)
+        N = 512
+        x = np.arange(N, dtype=float)
+        center = (N - 1) / 2.0
+        clean = 20.0 * np.exp(-0.5 * ((x - center) / 25.0) ** 2)
+        return clean + rng.normal(0, 1.0, N), clean
+
+    def test_peak_method_values(self):
+        noisy, _ = self._fixed_signal()
+        result = fft_cnr(noisy)
+        assert result.cutoff_index == 24
+        assert result.cnr == pytest.approx(19.9876, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        assert result.amplitude == pytest.approx(20.2278, rel=1e-4)
+
+    def test_matched_filter_cutoff_matches_peak(self):
+        """Knee detection is independent of the amplitude method, so the
+        cross-grid cutoff index must be identical for both."""
+        noisy, clean = self._fixed_signal()
+        result = fft_cnr(noisy, template=clean)
+        assert result.cutoff_index == 24
