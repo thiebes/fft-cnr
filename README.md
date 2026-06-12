@@ -106,10 +106,46 @@ result = fft_cnr(noisy, fit_model="generalized_gaussian")
 print(result.diagnostics["gaussian_fit_params"])
 ```
 
+## Noise model detection
+
+The CNR above treats the noise as one number, which is correct when the noise
+is the same at every point (for example, detector read noise). Photon-counting
+measurements violate this: shot noise grows with the local signal, so the
+noise under the peak is larger than the average noise, and `cnr` (peak over
+average noise) overestimates the peak signal-to-noise ratio by a
+profile-dependent factor.
+
+Setting `estimate_noise_model=True` makes `fft_cnr` test for this. It fits
+the photon-transfer relation (variance = gain x signal + read^2) to its own
+residual and attaches a `NoiseModel` to the result:
+
+```python
+result = fft_cnr(noisy, estimate_noise_model=True)
+model = result.noise_model
+
+if model.signal_dependent:
+    # Noise grows with the signal; result.cnr overestimates the peak SNR.
+    # The fitted noise model gives the corrected value:
+    print(f"Peak SNR: {model.peak_snr(result.amplitude):.1f}")
+```
+
+`model.signal_dependent` is `True` when the fitted gain is statistically
+significant, `False` when the noise is consistent with a constant level, and
+`None` when the profile's signal range is too small to test (the reason
+appears in `diagnostics["noise_model_skipped"]`). Significance is calibrated
+by simulation through the same estimation pipeline, so the test accounts for
+the estimator's own artifacts; the simulation adds about 200 internal
+re-runs, so the option costs roughly half a second at N=512.
+
+The detection is deterministic by default: the same input always produces the
+same result. Pass your own random generator (`rng=np.random.default_rng()`)
+to draw an independent simulation instead.
+
 ## Return value
 
 `fft_cnr` returns a `CNREstimate` dataclass. The first five fields are the
-primary outputs; `cutoff_index` and `diagnostics` are for advanced inspection.
+primary outputs; `cutoff_index`, `diagnostics`, and `noise_model` are for
+advanced inspection.
 
 | Field | Type | Description |
 | -------------- | ---------------------- | --------------------------------------------------- |
@@ -121,6 +157,7 @@ primary outputs; `cutoff_index` and `diagnostics` are for advanced inspection.
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
 | `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params |
+| `noise_model` | `NoiseModel \| None` | Fitted noise structure (`None` unless requested) |
 
 ## Parameters
 
@@ -140,6 +177,8 @@ rarely need adjustment.
 | `cutoff_guard` | `(0.05, 0.5)` | Fractional frequency bounds for signal/noise boundary search |
 | `fallback_cut_frac` | `0.25` | Fallback signal/noise boundary if AIC selection fails |
 | `return_bandpassed_noise` | `False` | Include the bandpassed noise array in diagnostics |
+| `estimate_noise_model` | `False` | Fit and test the noise model (see Noise model detection) |
+| `rng` | `None` | Generator for the noise-model test; `None` is deterministic |
 
 ## Accuracy
 
