@@ -232,6 +232,25 @@ across all tested conditions. The intervals are conservative—wider than
 the nominal 95%—because the chi-squared noise model overestimates
 uncertainty. This means the intervals are reliable but not tight.
 
+### Noise model detection
+
+Monte Carlo validation of the signal-dependence test (100 trials per
+condition, `scripts/validate_noise_model.py`) covers white noise, where the
+test should stay quiet, and Poisson counts, where it should fire. Conditions
+span Gaussian and flat-topped profiles, N in {256, 512}, and CNR 5--20; no
+trial was skipped for insufficient signal range.
+
+| Regime | Flag rate | Median gain | Median read |
+| --------------------------------------- | ------------------ | ---------------- | ----------- |
+| White noise (truth: gain 0, read 1) | 2--7% (nominal 5%) | -0.004 to +0.007 | 0.99--1.00 |
+| Poisson counts (truth: gain 1, read 0) | 100% | 0.95--1.02 | -- |
+
+On white noise the false-positive rate is consistent with the 5% test level
+and the fitted parameters recover the truth. On Poisson data the test fires
+in every trial, the fitted gain is within 5% of the true value, and the
+derived peak SNR tracks the true peak signal-to-noise ratio (ratio
+0.99--1.03 across N and CNR).
+
 ## Background
 
 The spectral decomposition approach used here originated in a study of noise
