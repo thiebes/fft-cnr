@@ -91,17 +91,23 @@ class CNREstimate:
     noise_model: NoiseModel | None = None
 
     @property
-    def matched_filter_snr(self) -> float:
-        """Matched-filter signal-to-noise ratio: amplitude over its std error.
+    def amplitude_snr(self) -> float:
+        """Amplitude signal-to-noise ratio: amplitude over its standard error.
 
-        This is the matched-filter member of the contrast-to-noise-ratio
-        family: the estimated amplitude divided by its standard error,
-        answering how detectable the signal is in the estimated noise. It is
-        defined whenever the amplitude path yields a finite standard error --
-        the matched filter (``template``) always, the generalized-Gaussian fit
-        when its covariance is finite, and the peak method via its proxy
-        standard error -- and is NaN when ``amplitude_se`` is not finite. No
-        standard error is fabricated for a path that lacks one.
+        Reports the detectability of the amplitude for whichever estimator
+        ran, which depends on the amplitude path:
+
+        - with a ``template``, this is exactly the matched-filter SNR -- the
+          efficient, full-covariance member of the contrast-to-noise-ratio
+          family;
+        - with the generalized-Gaussian fit, it is the fit's amplitude SNR
+          from the fit covariance;
+        - with the peak method, it is the amplitude over the proxy standard
+          error ``sigma / sqrt(kc_full)``, whose calibration is not
+          characterized.
+
+        It is NaN when ``amplitude_se`` is not finite. No standard error is
+        fabricated for a path that lacks one.
         """
         if np.isfinite(self.amplitude_se):
             return float(self.amplitude / self.amplitude_se)

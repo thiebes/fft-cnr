@@ -392,18 +392,20 @@ class TestGridConsistencyRegression:
         assert len(rms_values) == 1
 
 
-class TestMatchedFilterSNR:
-    """Tests for the matched_filter_snr derived property on CNREstimate."""
+class TestAmplitudeSNR:
+    """Tests for the amplitude_snr derived property on CNREstimate."""
 
     def test_template_path_equals_amplitude_over_se(self):
-        """On the matched-filter path the property is exactly amplitude / SE."""
+        """On the template path the property is exactly amplitude / SE, which
+        is the matched-filter SNR (the efficient, full-covariance estimator)."""
         rng = np.random.default_rng(42)
         t = np.linspace(0, 1, 256, endpoint=False)
         template = np.sin(2 * np.pi * 5 * t)
         signal = 3.0 * template + rng.normal(0, 0.5, 256)
         result = fft_cnr(signal, template=template)
+        assert result.diagnostics["amplitude_method"] == "matched_filter"
         assert np.isfinite(result.amplitude_se)
-        assert result.matched_filter_snr == pytest.approx(
+        assert result.amplitude_snr == pytest.approx(
             result.amplitude / result.amplitude_se
         )
 
@@ -419,7 +421,7 @@ class TestMatchedFilterSNR:
             cutoff_index=24,
             diagnostics={},
         )
-        assert np.isnan(result.matched_filter_snr)
+        assert np.isnan(result.amplitude_snr)
 
 
 class TestNoiseModel:
