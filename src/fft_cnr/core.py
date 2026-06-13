@@ -90,6 +90,23 @@ class CNREstimate:
     diagnostics: dict
     noise_model: NoiseModel | None = None
 
+    @property
+    def matched_filter_snr(self) -> float:
+        """Matched-filter signal-to-noise ratio: amplitude over its std error.
+
+        This is the matched-filter member of the contrast-to-noise-ratio
+        family: the estimated amplitude divided by its standard error,
+        answering how detectable the signal is in the estimated noise. It is
+        defined whenever the amplitude path yields a finite standard error --
+        the matched filter (``template``) always, the generalized-Gaussian fit
+        when its covariance is finite, and the peak method via its proxy
+        standard error -- and is NaN when ``amplitude_se`` is not finite. No
+        standard error is fabricated for a path that lacks one.
+        """
+        if np.isfinite(self.amplitude_se):
+            return float(self.amplitude / self.amplitude_se)
+        return float("nan")
+
 
 def _welch_psd_unitary(
     x: np.ndarray, nperseg: int, noverlap: int, win: str = "hann"

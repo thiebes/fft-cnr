@@ -97,6 +97,11 @@ Two alternatives are available:
   from heavy-tailed to flat-topped. Useful when fitted parameters (center,
   width, shape) are needed in addition to CNR.
 
+The `result.matched_filter_snr` property reports the amplitude divided by its
+standard error, a measure of how detectable the signal is in the estimated
+noise; it is defined whenever the amplitude path yields a standard error (every
+method above does) and is NaN otherwise.
+
 ```python
 # With a known template
 result = fft_cnr(noisy, template=signal)
@@ -153,6 +158,7 @@ advanced inspection.
 | `cnr_ci95` | `tuple[float, float]` | 95% confidence interval on CNR |
 | `amplitude` | `float` | Signal amplitude estimate |
 | `amplitude_se` | `float` | Standard error of the amplitude estimate |
+| `matched_filter_snr` | `float` (property) | Amplitude over its standard error; NaN when no standard error is available |
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
