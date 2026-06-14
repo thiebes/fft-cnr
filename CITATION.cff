@@ -9,7 +9,7 @@ authors:
     email: joseph@thiebes.org
     orcid: "https://orcid.org/0000-0002-7456-3952"
     affiliation: "Universidad Autónoma de Madrid"
-version: 0.2.0
+version: 0.2.1
 date-released: "2026-06-14"
 license: MIT
 repository-code: "https://github.com/thiebes/fft-cnr"
