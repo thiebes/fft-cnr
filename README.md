@@ -3,26 +3,36 @@
 FFT-based contrast-to-noise ratio estimation from a single frame.
 
 Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
-single acquisition—no repeat frames or separate background region needed.
+single acquisition. You do not need repeat frames or a separate background
+region.
 
-`fft-cnr` uses the Fourier transform to separate slowly-varying signal features
-from rapid point-to-point noise fluctuations. An automatic model-selection
-criterion (AIC) identifies the frequency boundary between the two, and the
-package returns a CNR estimate with a 95% confidence interval.
+Here CNR means the peak signal amplitude above the baseline, divided by the
+RMS of the noise. This is a peak-amplitude signal-to-noise ratio, not a
+two-region (difference-of-means) contrast measure.
+
+`fft-cnr` uses the Fourier transform to separate the slowly varying signal from
+the rapid, point-to-point noise. The package automatically finds the frequency
+boundary between the two (using a model-selection score, the Akaike information
+criterion or AIC) and returns a CNR estimate with a 95% confidence interval.
 
 ## Installation
 
-Requires Python 3.10 or later. If you don't have Python installed,
-[download it from python.org](https://www.python.org/downloads/) and follow
-the installer instructions (on Windows, check "Add Python to PATH" when
-prompted).
+Requires Python 3.10 or later (tested on 3.10 through 3.13). If you do not have
+Python installed, [download it from python.org](https://www.python.org/downloads/)
+and follow the installer instructions (on Windows, check "Add Python to PATH"
+when prompted).
 
-Then run this command in a terminal (Command Prompt or PowerShell on Windows,
-Terminal on macOS/Linux):
+Install into a virtual environment so the package and its dependencies stay
+isolated from your other projects:
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install fft-cnr
 ```
+
+The only runtime dependencies are numpy (>=1.24) and scipy (>=1.10); pip
+installs them automatically.
 
 ## Quick start
 
@@ -52,57 +62,78 @@ Amplitude: 9.74
 Noise RMS: 0.991
 ```
 
+The output is deterministic given the seed, so this snippet reproduces the same
+numbers on each run. The package exposes three names: the `fft_cnr` function and
+its result types `CNREstimate` and `NoiseModel`.
+
 ## How it works
 
-1. The input profile is mean-subtracted and tapered with a window function
-   (Tukey by default) to suppress edge artifacts in the Fourier transform.
-2. The power spectrum is estimated by averaging FFTs of overlapping segments,
-   which produces a smoother estimate than a single FFT (Welch's method). More
-   segments yield tighter confidence intervals.
-3. The power spectrum typically shows high power at low frequencies (signal)
-   that levels off to a flat noise floor at higher frequencies. The algorithm
-   finds this transition by fitting two line segments in log-log space and
-   using the Akaike information criterion (AIC, a standard metric that
-   penalizes overfitting) to select the boundary that best balances fit
+A smooth signal spread over many points concentrates its energy in a few
+low-frequency Fourier components. Uncorrelated, point-to-point noise spreads its
+energy across all frequencies. So in the power spectrum the signal sits at low
+frequency and the noise dominates the high-frequency end, which is where the two
+can be separated.
+
+1. The input profile is mean-subtracted and tapered with a window function (a
+   tapered cosine, or Tukey, window by default) to suppress edge artifacts in
+   the Fourier transform.
+2. The power spectrum is estimated by averaging the transforms of overlapping
+   segments, which is smoother than a single transform (the averaged-segment, or
+   Welch, method). More segments give the noise estimate more degrees of
+   freedom, which tightens its confidence interval; this does not by itself
+   improve the CNR point estimate.
+3. The power spectrum typically shows high power at low frequencies, where the
+   signal lives, that levels off to a flat noise floor at higher frequencies.
+   The algorithm finds this transition by fitting two line segments in log-log
+   space. It then uses the Akaike information criterion (AIC, a standard score
+   that penalizes overfitting) to pick the boundary that best balances fit
    quality against model complexity.
-4. Noise RMS is computed from the inverse FFT of the frequencies above the
-   signal/noise boundary.
+4. The spectral bins at and below the boundary are set to zero, the remaining
+   high-frequency bins are transformed back to real space, and the RMS of that
+   reconstructed noise is taken. This RMS is then scaled to undo the window
+   energy and the fraction of bins kept, so it estimates the full-band noise
+   level.
 5. Signal amplitude is estimated by one of three methods (see below), and
    CNR = amplitude / noise RMS.
-6. A 95% confidence interval on CNR is computed by error propagation (delta
-   method), combining uncertainty from the amplitude estimate and the
-   chi-squared noise interval.
+6. A 95% confidence interval on CNR is computed by first-order error propagation
+   (the delta method), combining the amplitude error and the chi-squared noise
+   interval.
 
-The method works best when the signal occupies low frequencies and the noise
-is broadband (approximately white). Profiles shorter than about 64 points
-provide too few spectral bins for reliable knee detection, and signals with
-significant high-frequency content that overlaps the noise band will bias the
-CNR estimate.
+The method works best when the signal occupies low frequencies and the noise is
+broadband (approximately white). The hard minimum length is 16 points (shorter
+inputs raise `ValueError`); reliable knee detection needs more, with measurable
+bias below roughly 128 points (see Accuracy). Signals with strong high-frequency
+content that overlaps the noise band will also bias the CNR estimate.
 
 ## Amplitude estimation
 
 By default (`fit_model=None` or `"peak"`), `fft_cnr` removes the high-frequency
 noise components (by zeroing frequencies above the signal/noise boundary) and
-reads the peak of the resulting smoothed profile. This is robust across
-arbitrary profile shapes and requires no assumptions about the functional form.
+reads the peak of the resulting smoothed profile, measured above a baseline
+estimated from the outer quarter of the profile on each side. This works for any
+profile shape and assumes nothing about its functional form. If the signal
+extends into those outer regions, the baseline is contaminated and the amplitude
+is underestimated.
 
 Two alternatives are available:
 
 - **Matched filter** (`template` parameter): when a noise-free template of the
   expected signal shape is available, a matched filter weighted by the noise
-  spectrum provides the most precise amplitude estimate and standard error.
+  spectrum gives the most precise amplitude estimate and standard error. This
+  holds only when the template matches the true shape; a mismatched template
+  biases the amplitude.
 
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
-  5-parameter model with a shape exponent that accommodates profiles ranging
-  from heavy-tailed to flat-topped. Useful when fitted parameters (center,
-  width, shape) are needed in addition to CNR.
+  5-parameter model with a shape exponent that covers profiles from heavy-tailed
+  to flat-topped. Useful when fitted parameters (center, width, shape) are
+  needed in addition to CNR.
 
 The `result.amplitude_snr` property reports the amplitude divided by its
-standard error for whichever estimator ran, a measure of how detectable the
-amplitude is. With a template it is exactly the matched-filter SNR; with the
-generalized-Gaussian fit it is the fit's amplitude SNR; with the peak method it
-uses a proxy standard error whose calibration is not characterized. It is NaN
-when no standard error is available.
+standard error for whichever estimator ran. A larger value means the amplitude
+stands out more clearly above the noise. With a template it is exactly the
+matched-filter SNR; with the generalized-Gaussian fit it is the fit's amplitude
+SNR; with the peak method it uses a proxy standard error whose calibration is
+not characterized. It is NaN when no standard error is available.
 
 ```python
 # With a known template
@@ -117,14 +148,16 @@ print(result.diagnostics["gaussian_fit_params"])
 
 The CNR above treats the noise as one number, which is correct when the noise
 is the same at every point (for example, detector read noise). Photon-counting
-measurements violate this: shot noise grows with the local signal, so the
-noise under the peak is larger than the average noise, and `cnr` (peak over
-average noise) overestimates the peak signal-to-noise ratio by a
-profile-dependent factor.
+measurements break this assumption. Shot noise grows with the local signal, so
+the noise under the peak is larger than the average noise. Because `cnr` divides
+the peak by the average noise, it overestimates the true peak signal-to-noise
+ratio, and the size of the error depends on the profile shape.
 
-Setting `estimate_noise_model=True` makes `fft_cnr` test for this. It fits
-the photon-transfer relation (variance = gain x signal + read^2) to its own
-residual and attaches a `NoiseModel` to the result:
+Setting `estimate_noise_model=True` makes `fft_cnr` test for this. It fits the
+photon-transfer relation (variance = gain * signal + read^2) to its own
+residual, a single-frame surrogate for a photon-transfer curve that is
+conventionally measured from many exposures, and attaches a `NoiseModel` to the
+result:
 
 ```python
 result = fft_cnr(noisy, estimate_noise_model=True)
@@ -139,10 +172,10 @@ if model.signal_dependent:
 `model.signal_dependent` is `True` when the fitted gain is statistically
 significant, `False` when the noise is consistent with a constant level, and
 `None` when the profile's signal range is too small to test (the reason
-appears in `diagnostics["noise_model_skipped"]`). Significance is calibrated
-by simulation through the same estimation pipeline, so the test accounts for
-the estimator's own artifacts; the simulation adds about 200 internal
-re-runs, so the option costs roughly half a second at N=512.
+appears in `diagnostics["noise_model_skipped"]`). To judge significance, the
+package runs the whole estimation pipeline on about 200 simulated data sets, so
+the test accounts for the estimator's own artifacts. These extra runs cost
+roughly half a second at N=512.
 
 The detection is deterministic by default: the same input always produces the
 same result. Pass your own random generator (`rng=np.random.default_rng()`)
@@ -151,17 +184,21 @@ to draw an independent simulation instead.
 ### Correlated (1/f) noise is not corrected
 
 Signal-dependence is one way the constant-noise assumption fails. Spatially
-correlated, 1/f-type noise is a separate one. It arises when temporal drift
-maps onto a spatial direction, as in galvo raster scanning or streak cameras.
-The drift puts noise power at low spatial frequency, where `fft_cnr` reads
-signal, so it biases `cnr` high. The `NoiseModel` fields `spectral_exponent`,
-`white_floor`, and `correlated` name this case, but they are reserved: the two
-floats stay NaN and the flag stays None. Single-frame quantitative correction
-of correlated noise is not supported. An estimated signal shape leaves
-low-frequency model error that one frame cannot distinguish from 1/f noise, so
-the exponent and floor cannot be recovered without bias. Characterize and
-correct correlated noise with multiple frames, interleaved acquisition, or a
-reference channel.
+correlated, 1/f-type noise is a separate one. It arises when temporal drift maps
+onto a spatial direction, as in galvo raster scanning or streak cameras. The
+drift puts noise power at low spatial frequency, where `fft_cnr` reads signal,
+so it biases `cnr` high.
+
+The `NoiseModel` has fields for this case (`spectral_exponent`, `white_floor`,
+and `correlated`), but they are reserved and not filled in: the two floats stay
+NaN and the flag stays None. Single-frame quantitative correction of correlated
+noise is not supported, and the reason is an identifiability limit. The signal
+and the 1/f noise both live in the low frequencies, and a single profile gives
+one measurement, so there is no way to tell how much of the low-frequency power
+is signal and how much is drift; any split fits the data equally well.
+Separating them needs a second, independent view in which the signal repeats but
+the noise does not: multiple frames, an interleaved scan, or a reference
+channel. Those are also the way to correct correlated noise once it is detected.
 
 ## Return value
 
@@ -203,12 +240,17 @@ rarely need adjustment.
 | `estimate_noise_model` | `False` | Fit and test the noise model (see Noise model detection) |
 | `rng` | `None` | Generator for the noise-model test; `None` is deterministic |
 
+The minimum accepted length is 16 points. Reliable results need more; see How it
+works for guidance on length.
+
 ## Accuracy
 
 Monte Carlo validation (200 trials per condition, `scripts/validate_accuracy.py`)
-characterizes bias, precision, and confidence interval coverage across five
+characterizes bias, precision, and confidence-interval coverage across five
 signal shapes: Gaussian, heavy-tailed (generalized Gaussian, p=1.5),
-flat-topped (p=4), Gaussian mixture, and Lorentzian.
+flat-topped (p=4), Gaussian mixture, and Lorentzian. All conditions use additive
+white Gaussian noise, the regime the method assumes, so the headline accuracy
+numbers inherit that assumption.
 
 ### Bias
 
@@ -250,10 +292,11 @@ method, CNR=5). Providing a matched template reduces scatter at low CNR.
 
 ### Confidence intervals
 
-The 95% confidence intervals contain the true value in 99--100% of trials
-across all tested conditions. The intervals are conservative—wider than
-the nominal 95%—because the chi-squared noise model overestimates
-uncertainty. This means the intervals are reliable but not tight.
+The 95% confidence intervals contain the true value in 99 to 100% of trials
+across all tested conditions. The intervals are conservative, that is, wider
+than a true 95% interval, because the degrees of freedom used for the noise
+interval are set conservatively, so the chi-squared interval comes out wider
+than nominal. The intervals are therefore reliable but not tight.
 
 ### Noise model detection
 
@@ -269,10 +312,10 @@ trial was skipped for insufficient signal range.
 | Poisson counts (truth: gain 1, read 0) | 100% | 0.95--1.02 | -- |
 
 On white noise the false-positive rate is consistent with the 5% test level
-and the fitted parameters recover the truth. On Poisson data the test fires
-in every trial, the fitted gain is within 5% of the true value, and the
-derived peak SNR tracks the true peak signal-to-noise ratio (ratio
-0.99--1.03 across N and CNR).
+and the fitted parameters recover the truth. On Poisson data the test fired in
+all 100 trials at these conditions, the fitted gain is within 5% of the true
+value, and the derived peak SNR tracks the true peak signal-to-noise ratio
+(ratio 0.99 to 1.03 across N and CNR).
 
 ## Background
 
@@ -282,9 +325,9 @@ effects on diffusion coefficient estimation in chemical transport imaging:
 > J. J. Thiebes, E. M. Grumstrup, J. Chem. Phys. **160**, 124201 (2024).
 > [doi:10.1063/5.0190347](https://doi.org/10.1063/5.0190347)
 
-The implementation in this package has evolved from the method described in
-that paper—the PSD estimation, knee detection, and confidence interval
-machinery differ from the original.
+This package has evolved from the method described in that paper. The
+power-spectrum estimation, knee detection, and confidence-interval machinery all
+differ from the original.
 
 Support for non-Gaussian profiles was motivated by work on excess kurtosis
 in exciton transport:
@@ -299,4 +342,5 @@ non-Gaussian transport profiles that informed the design of this package.
 
 ## License
 
-MIT
+Released under the MIT License; see the [LICENSE](LICENSE) file for the full
+text.
