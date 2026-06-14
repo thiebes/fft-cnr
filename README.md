@@ -1,5 +1,10 @@
 # fft-cnr
 
+[![PyPI](https://img.shields.io/pypi/v/fft-cnr.svg)](https://pypi.org/project/fft-cnr/)
+[![Python versions](https://img.shields.io/pypi/pyversions/fft-cnr.svg)](https://pypi.org/project/fft-cnr/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20691435.svg)](https://doi.org/10.5281/zenodo.20691435)
+
 FFT-based contrast-to-noise ratio estimation from a single frame.
 
 Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
@@ -181,6 +186,13 @@ The detection is deterministic by default: the same input always produces the
 same result. Pass your own random generator (`rng=np.random.default_rng()`)
 to draw an independent simulation instead.
 
+Estimating a Poisson-Gaussian noise model from a single image is established
+prior art, most notably the single-image method of Foi et al. (IEEE Trans.
+Image Process. 17, 1737 (2008)). This detector does not claim to be first at
+single-frame noise estimation. What it adds is to fold the photon-transfer fit
+into the spectral decomposition the CNR already computes, gated by a
+significance test calibrated through the same pipeline.
+
 ### Correlated (1/f) noise is not corrected
 
 Signal-dependence is one way the constant-noise assumption fails. Spatially
@@ -317,6 +329,31 @@ all 100 trials at these conditions, the fitted gain is within 5% of the true
 value, and the derived peak SNR tracks the true peak signal-to-noise ratio
 (ratio 0.99 to 1.03 across N and CNR).
 
+## Citation
+
+If you use fft-cnr in published work, please cite it. The concept DOI below
+always resolves to the latest release; to cite the exact version you used, take
+that version's DOI from the Zenodo record and report the pinned version
+(`pip install fft-cnr==0.2.0`).
+
+> Joseph J. Thiebes. fft-cnr: FFT-based contrast-to-noise ratio estimation from
+> a single frame. Zenodo. https://doi.org/10.5281/zenodo.20691435
+
+```bibtex
+@software{thiebes_fft_cnr,
+  author    = {Thiebes, Joseph J.},
+  title     = {fft-cnr: FFT-based contrast-to-noise ratio estimation from a single frame},
+  version   = {0.2.0},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.20691435},
+  url       = {https://doi.org/10.5281/zenodo.20691435}
+}
+```
+
+Citation metadata is in [CITATION.cff](CITATION.cff); GitHub's "Cite this
+repository" button generates APA and BibTeX from it.
+
 ## Background
 
 The spectral decomposition approach used here originated in a study of noise
@@ -334,6 +371,19 @@ in exciton transport:
 
 > E. Arévalo Rodríguez, M. Meléndez, J. Cuadra, F. Prins, J. Phys. Chem. Lett.
 > **17**, 2479--2484 (2026). [doi:10.1021/acs.jpclett.5c03961](https://doi.org/10.1021/acs.jpclett.5c03961)
+
+**Methods and background.** The package implements established signal-processing
+and sensor-characterization methods: averaged-periodogram power-spectrum
+estimation (Welch, 1967), window tapering for harmonic analysis (Harris, 1978),
+model selection by the Akaike information criterion (Akaike, 1974), matched
+filtering (North, 1963; Turin, 1960), the estimation-theory framework for
+standard errors and the Cramér-Rao bound on estimator variance (Kay, 1993), and
+the photon-transfer characterization of sensor noise (Janesick, 2007; EMVA
+Standard 1288). Estimating a Poisson-Gaussian noise model from a single image is
+established separately (Foi et al., 2008); this package folds a photon-transfer
+fit into the spectral decomposition it already computes rather than
+reimplementing that method. Full references with DOIs are in
+[CITATION.cff](CITATION.cff).
 
 ## Acknowledgments
 

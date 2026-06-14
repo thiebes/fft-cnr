@@ -1,7 +1,8 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
-title: "fft-cnr: FFT-based contrast-to-noise ratio estimation from single frames"
+title: "fft-cnr: FFT-based contrast-to-noise ratio estimation from a single frame"
 type: software
+doi: "10.5281/zenodo.20691435"
 authors:
   - family-names: Thiebes
     given-names: "Joseph J."
@@ -19,3 +20,112 @@ keywords:
   - signal-processing
   - noise
   - measurement
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20691435"
+    description: "Concept DOI (resolves to the latest version)"
+references:
+  - type: article
+    title: "Practical Poissonian-Gaussian noise modeling and fitting for single-image raw-data"
+    authors:
+      - family-names: Foi
+        given-names: Alessandro
+      - family-names: Trimeche
+        given-names: Mejdi
+      - family-names: Katkovnik
+        given-names: Vladimir
+      - family-names: Egiazarian
+        given-names: Karen
+    journal: "IEEE Transactions on Image Processing"
+    volume: 17
+    issue: 10
+    start: 1737
+    end: 1754
+    year: 2008
+    doi: "10.1109/TIP.2008.2001399"
+  - type: article
+    title: "The use of fast Fourier transform for the estimation of power spectra: A method based on time averaging over short, modified periodograms"
+    authors:
+      - family-names: Welch
+        given-names: "Peter D."
+    journal: "IEEE Transactions on Audio and Electroacoustics"
+    volume: 15
+    issue: 2
+    start: 70
+    end: 73
+    year: 1967
+    doi: "10.1109/TAU.1967.1161901"
+  - type: article
+    title: "On the use of windows for harmonic analysis with the discrete Fourier transform"
+    authors:
+      - family-names: Harris
+        given-names: "Fredric J."
+    journal: "Proceedings of the IEEE"
+    volume: 66
+    issue: 1
+    start: 51
+    end: 83
+    year: 1978
+    doi: "10.1109/PROC.1978.10837"
+  - type: article
+    title: "A new look at the statistical model identification"
+    authors:
+      - family-names: Akaike
+        given-names: Hirotugu
+    journal: "IEEE Transactions on Automatic Control"
+    volume: 19
+    issue: 6
+    start: 716
+    end: 723
+    year: 1974
+    doi: "10.1109/TAC.1974.1100705"
+  - type: article
+    title: "An analysis of the factors which determine signal/noise discrimination in pulsed-carrier systems"
+    authors:
+      - family-names: North
+        given-names: "D. O."
+    journal: "Proceedings of the IEEE"
+    volume: 51
+    issue: 7
+    start: 1016
+    end: 1027
+    year: 1963
+    doi: "10.1109/PROC.1963.2383"
+  - type: article
+    title: "An introduction to matched filters"
+    authors:
+      - family-names: Turin
+        given-names: "George L."
+    journal: "IRE Transactions on Information Theory"
+    volume: 6
+    issue: 3
+    start: 311
+    end: 329
+    year: 1960
+    doi: "10.1109/TIT.1960.1057571"
+  - type: book
+    title: "Fundamentals of Statistical Signal Processing, Volume I: Estimation Theory"
+    authors:
+      - family-names: Kay
+        given-names: "Steven M."
+    publisher:
+      name: "Prentice Hall"
+    year: 1993
+    isbn: "978-0-13-345711-7"
+  - type: book
+    title: "Photon Transfer"
+    authors:
+      - family-names: Janesick
+        given-names: "James R."
+    publisher:
+      name: "SPIE Press"
+    year: 2007
+    doi: "10.1117/3.725073"
+    isbn: "978-0-8194-6722-5"
+  - type: standard
+    title: "EMVA Standard 1288: Standard for Characterization of Image Sensors and Cameras"
+    authors:
+      - name: "European Machine Vision Association"
+    version: "4.0"
+    year: 2021
+    url: "https://www.emva.org"
