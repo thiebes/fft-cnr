@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "fft-cnr: FFT-based contrast-to-noise ratio estimation from single frames"
+type: software
+authors:
+  - family-names: Thiebes
+    given-names: "Joseph J."
+    email: joseph@thiebes.org
+    orcid: "https://orcid.org/0000-0002-7456-3952"
+    affiliation: "Universidad Autónoma de Madrid"
+version: 0.2.0
+date-released: "2026-06-14"
+license: MIT
+repository-code: "https://github.com/thiebes/fft-cnr"
+url: "https://github.com/thiebes/fft-cnr"
+keywords:
+  - cnr
+  - fft
+  - signal-processing
+  - noise
+  - measurement
