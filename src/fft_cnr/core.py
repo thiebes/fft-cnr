@@ -19,8 +19,8 @@ class NoiseModel:
     photon-transfer relation ``var = gain * signal + read**2`` and is
     populated by the ``estimate_noise_model`` detector. The spectral axis
     (``spectral_exponent``, ``white_floor``, ``correlated``) names spatially
-    correlated, ``1/f``-type noise; these fields are reserved interface and
-    are not populated. Single-frame quantitative correction of correlated
+    correlated, ``1/f``-type noise; these fields are reserved and are not
+    populated. Single-frame quantitative correction of correlated
     noise is unsupported: the low-frequency model error left by an estimated
     signal shape is indistinguishable from ``1/f`` noise in one frame, so the
     spectral exponent and white floor cannot be recovered without bias. Use

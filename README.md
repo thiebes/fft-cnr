@@ -150,16 +150,17 @@ to draw an independent simulation instead.
 
 ### Correlated (1/f) noise is not corrected
 
-Signal-dependence is one way the constant-noise assumption fails; spatially
-correlated, 1/f-type noise is the orthogonal one. It arises when temporal drift
-maps onto a spatial axis (galvo raster scanning, streak cameras), placing noise
-power at low spatial frequency where `fft_cnr` reads signal, which biases `cnr`
-high. The `NoiseModel` fields `spectral_exponent`, `white_floor`, and
-`correlated` name this axis, but they are reserved and stay NaN/None: single-frame
-quantitative correction of correlated noise is not supported. An estimated signal
-shape leaves low-frequency model error that one frame cannot distinguish from 1/f
-noise, so the exponent and floor cannot be recovered without bias. Characterize
-and correct correlated noise with multiple frames, interleaved acquisition, or a
+Signal-dependence is one way the constant-noise assumption fails. Spatially
+correlated, 1/f-type noise is a separate one. It arises when temporal drift
+maps onto a spatial direction, as in galvo raster scanning or streak cameras.
+The drift puts noise power at low spatial frequency, where `fft_cnr` reads
+signal, so it biases `cnr` high. The `NoiseModel` fields `spectral_exponent`,
+`white_floor`, and `correlated` name this case, but they are reserved: the two
+floats stay NaN and the flag stays None. Single-frame quantitative correction
+of correlated noise is not supported. An estimated signal shape leaves
+low-frequency model error that one frame cannot distinguish from 1/f noise, so
+the exponent and floor cannot be recovered without bias. Characterize and
+correct correlated noise with multiple frames, interleaved acquisition, or a
 reference channel.
 
 ## Return value

@@ -513,6 +513,9 @@ class TestNoiseModelDetection:
         assert model.signal_dependent is True
         assert 0.5 < model.gain < 1.5
         assert model.read < 0.5
+        assert model.correlated is None
+        assert np.isnan(model.spectral_exponent)
+        assert np.isnan(model.white_floor)
 
     def test_shot_noise_peak_snr(self):
         """peak_snr from the fitted model should land near the true peak SNR
@@ -545,6 +548,9 @@ class TestNoiseModelDetection:
         assert model.signal_dependent is None
         assert np.isnan(model.gain)
         assert np.isnan(model.read)
+        assert model.correlated is None
+        assert np.isnan(model.spectral_exponent)
+        assert np.isnan(model.white_floor)
         assert "noise_model_skipped" in result.diagnostics
 
     def test_works_with_template_path(self):
