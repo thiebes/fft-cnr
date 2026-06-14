@@ -16,15 +16,21 @@ class NoiseModel:
 
     Characterizes the noise along two orthogonal axes. The real-space axis
     (``read``, ``gain``) captures signal-dependent noise via the
-    photon-transfer relation ``var = gain * signal + read**2``. The spectral
-    axis (``spectral_exponent``, ``white_floor``) captures spatially
-    correlated noise via a ``1/f**b`` power-law fit to the noise band.
-    White, signal-independent noise is the degenerate case of both axes:
-    zero gain, zero spectral exponent.
+    photon-transfer relation ``var = gain * signal + read**2`` and is
+    populated by the ``estimate_noise_model`` detector. The spectral axis
+    (``spectral_exponent``, ``white_floor``, ``correlated``) names spatially
+    correlated, ``1/f``-type noise; these fields are reserved interface and
+    are not populated. Single-frame quantitative correction of correlated
+    noise is unsupported: the low-frequency model error left by an estimated
+    signal shape is indistinguishable from ``1/f`` noise in one frame, so the
+    spectral exponent and white floor cannot be recovered without bias. Use
+    multiple frames, interleaved acquisition, or a reference channel to
+    characterize and correct correlated noise. White, signal-independent
+    noise is the degenerate case of the real-space axis (zero gain).
 
-    Numeric fields are NaN and flags are None until the corresponding
-    detector has run, so "not tested" is distinguishable from "tested, not
-    significant".
+    Real-space numeric fields are NaN and ``signal_dependent`` is None until
+    the detector has run, so "not tested" is distinguishable from "tested,
+    not significant"; the spectral-axis fields stay at those sentinels.
 
     Attributes
     ----------
@@ -33,13 +39,15 @@ class NoiseModel:
     gain : float
         Photon-transfer slope (var-vs-signal).
     spectral_exponent : float
-        Noise-band power-law exponent (0 = white).
+        Reserved (correlated-noise axis); always NaN. Single-frame ``1/f``
+        correction is unsupported (see the class notes above).
     white_floor : float
-        White noise level from the noise-band fit.
+        Reserved (correlated-noise axis); always NaN.
     signal_dependent : bool or None
         Whether the gain is significantly above the pipeline null.
     correlated : bool or None
-        Whether the spectral slope is significantly above the pipeline null.
+        Reserved flag for a correlated-noise detector; always None
+        (detection deferred, no single-frame correction).
     """
 
     read: float
@@ -368,8 +376,8 @@ def _estimate_noise_model(
     residual, filter-induced correlation, and knee-placement jitter are all
     represented in the null distribution rather than assumed away.
 
-    Spectral-axis fields stay NaN/None; they belong to the correlated-noise
-    detector.
+    Spectral-axis fields stay NaN/None: single-frame correlated-noise
+    correction is unsupported (see ``NoiseModel``).
 
     Returns
     -------

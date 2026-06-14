@@ -148,6 +148,20 @@ The detection is deterministic by default: the same input always produces the
 same result. Pass your own random generator (`rng=np.random.default_rng()`)
 to draw an independent simulation instead.
 
+### Correlated (1/f) noise is not corrected
+
+Signal-dependence is one way the constant-noise assumption fails; spatially
+correlated, 1/f-type noise is the orthogonal one. It arises when temporal drift
+maps onto a spatial axis (galvo raster scanning, streak cameras), placing noise
+power at low spatial frequency where `fft_cnr` reads signal, which biases `cnr`
+high. The `NoiseModel` fields `spectral_exponent`, `white_floor`, and
+`correlated` name this axis, but they are reserved and stay NaN/None: single-frame
+quantitative correction of correlated noise is not supported. An estimated signal
+shape leaves low-frequency model error that one frame cannot distinguish from 1/f
+noise, so the exponent and floor cannot be recovered without bias. Characterize
+and correct correlated noise with multiple frames, interleaved acquisition, or a
+reference channel.
+
 ## Return value
 
 `fft_cnr` returns a `CNREstimate` dataclass. The first five fields are the
