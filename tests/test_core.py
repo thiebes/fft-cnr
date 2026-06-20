@@ -367,9 +367,12 @@ class TestGridConsistencyRegression:
     def test_matched_filter_values(self):
         noisy, clean = self._fixed_signal()
         result = fft_cnr(noisy, template=clean)
-        assert result.cnr == pytest.approx(0.98003, rel=1e-4)
-        assert result.amplitude == pytest.approx(0.99181, rel=1e-4)
+        assert result.cnr == pytest.approx(0.97641, rel=1e-4)
+        assert result.amplitude == pytest.approx(0.98814, rel=1e-4)
         assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        # Pin the noise-only-whitened standard error: a regression here would
+        # signal the signal-contaminated whitening has crept back in.
+        assert result.amplitude_se == pytest.approx(0.0084777, rel=1e-3)
 
     def test_generalized_gaussian_values(self):
         noisy, _ = self._fixed_signal()
@@ -419,8 +422,31 @@ class TestAmplitudeSNR:
             noise_rms=2.0,
             noise_ci95=(1.8, 2.2),
             cutoff_index=24,
-            diagnostics={},
+            diagnostics={"amplitude_method": "matched_filter"},
         )
+        assert np.isnan(result.amplitude_snr)
+
+    def test_nan_on_peak_path(self):
+        """The peak proxy SE is uncharacterized, so it is not exposed."""
+        rng = np.random.default_rng(42)
+        N = 256
+        x = np.arange(N, dtype=float)
+        signal = 10.0 * np.exp(-0.5 * ((x - (N - 1) / 2) / 20.0) ** 2)
+        result = fft_cnr(signal + rng.normal(0, 1.0, N))
+        assert result.diagnostics["amplitude_method"] == "peak"
+        assert np.isfinite(result.amplitude_se)
+        assert np.isnan(result.amplitude_snr)
+
+    def test_nan_on_generalized_gaussian_path(self):
+        """The fit-residual SE is a different object, so it is not exposed."""
+        rng = np.random.default_rng(42)
+        N = 256
+        x = np.arange(N, dtype=float)
+        signal = 10.0 * np.exp(-0.5 * ((x - (N - 1) / 2) / 20.0) ** 2)
+        result = fft_cnr(signal + rng.normal(0, 1.0, N),
+                         fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert np.isfinite(result.amplitude_se)
         assert np.isnan(result.amplitude_snr)
 
 

@@ -75,7 +75,12 @@ class CNREstimate:
     amplitude : float
         Estimated signal amplitude.
     amplitude_se : float
-        Standard error of the amplitude estimate (NaN if unavailable).
+        Standard error of the amplitude estimate (NaN if unavailable). On the
+        matched-filter and generalized-Gaussian paths this is a derived
+        standard error; on the default peak path it is an uncharacterized
+        proxy (``sigma / sqrt(kc_full)``) that understates the true scatter,
+        so it feeds ``cnr_ci95`` (where the noise term dominates) but is not
+        exposed through ``amplitude_snr``.
     noise_rms : float
         RMS noise estimated from high-frequency spectral region.
     noise_ci95 : tuple[float, float]
@@ -100,24 +105,20 @@ class CNREstimate:
 
     @property
     def amplitude_snr(self) -> float:
-        """Amplitude signal-to-noise ratio: amplitude over its standard error.
+        """Matched-filter signal-to-noise ratio: amplitude over its standard error.
 
-        Reports the detectability of the amplitude for whichever estimator
-        ran, which depends on the amplitude path:
-
-        - with a ``template``, this is exactly the matched-filter SNR -- the
-          efficient, full-covariance member of the contrast-to-noise-ratio
-          family;
-        - with the generalized-Gaussian fit, it is the fit's amplitude SNR
-          from the fit covariance;
-        - with the peak method, it is the amplitude over the proxy standard
-          error ``sigma / sqrt(kc_full)``, whose calibration is not
-          characterized.
-
-        It is NaN when ``amplitude_se`` is not finite. No standard error is
-        fabricated for a path that lacks one.
+        Defined only on the matched-filter (``template``) path, where the
+        standard error is the whitened estimator's, so the ratio is the
+        efficient detectability member of the contrast-to-noise-ratio family.
+        It is NaN on every other path: the peak proxy standard error is
+        uncharacterized, and the generalized-Gaussian standard error is
+        denominated in the fit residual rather than the noise spectrum, so
+        neither is the same statistical object and the values are not
+        comparable. Those paths still expose ``amplitude_se`` directly for any
+        caller that wants the raw ratio.
         """
-        if np.isfinite(self.amplitude_se):
+        is_matched = self.diagnostics.get("amplitude_method") == "matched_filter"
+        if is_matched and np.isfinite(self.amplitude_se):
             return float(self.amplitude / self.amplitude_se)
         return float("nan")
 
@@ -607,8 +608,6 @@ def fft_cnr(
     x = d.x
     x_mean = d.x_mean
     w = d.w
-    X = d.X
-    Pxx_full = d.Pxx_full
     kc_full = d.kc_full
     sigma = d.sigma
     sigma_ci = d.sigma_ci
@@ -636,15 +635,21 @@ def fft_cnr(
             else:
                 t = np.pad(t, (0, N - t.size))
         t = t - np.mean(t)
-        Tw = t * w
-        T = np.fft.rfft(Tw, norm="ortho")
-        Sn = np.maximum(Pxx_full, np.finfo(float).tiny)
-        num = np.sum(X * np.conj(T) / Sn)
-        den = np.sum(np.abs(T) ** 2 / Sn)
-        Ahat = np.real(num / den)
-        Avar = 1.0 / den
-        Amp = Ahat
-        Amp_se = np.sqrt(Avar)
+        # White-noise matched filter: project the windowed, demeaned data onto
+        # the windowed template.  The earlier version whitened by the full data
+        # power spectrum, but that spectrum is signal-contaminated in the signal
+        # band, which inflated the standard error (and hence cnr_ci95) on this
+        # path.  For the broadband-white noise the package targets, the optimal
+        # weighting is flat, so the unweighted projection is the efficient
+        # estimator and its standard error follows in closed form.
+        tw = t * w
+        xw = x * w
+        denom = float(np.sum(tw * tw))
+        Amp = float(np.sum(xw * tw) / denom)
+        # Exact standard error of the projection under white noise of level
+        # sigma: var(Amp) = sigma**2 * sum(w**2 * tw**2) / denom**2, which
+        # reduces to the textbook sigma / ||t|| when the window is flat.
+        Amp_se = float(sigma * np.sqrt(np.sum((w * tw) ** 2)) / denom)
         amp_method = "matched_filter"
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean

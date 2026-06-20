@@ -230,7 +230,7 @@ def main():
           f"{min(gg_ratios):.2f} -- {max(gg_ratios):.2f}")
     print(f"  Matched filter (Gaussian):           "
           f"{min(matched_ratios):.2f} -- {max(matched_ratios):.2f}  "
-          f"(overstates; PSD self-contamination, grows with CNR)")
+          f"(noise-only whitening)")
     print("=" * 72)
 
 
