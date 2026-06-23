@@ -50,3 +50,7 @@ validation = [
     "matplotlib>=3.7",
     "tqdm>=4.60",
 ]
+assets = [
+    "matplotlib>=3.7",
+    "curved-text>=0.4.0",
+]
