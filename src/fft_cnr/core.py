@@ -794,11 +794,19 @@ def fft_cnr(
         # Slice a full-length template to the same window as the data so the two
         # stay aligned; without this a full-profile template would be truncated
         # from its start and the matched filter would project onto the wrong
-        # samples. A template already sized to the ROI is left untouched.
+        # samples. A template already sized to the ROI is left untouched. Any
+        # other length cannot be aligned to the window, so reject it rather than
+        # silently project onto mismatched samples.
         if template is not None:
             t_full = np.asarray(template, float).ravel()
+            span = roi_bounds[1] - roi_bounds[0]
             if t_full.size == N:
                 template = t_full[roi_bounds[0] : roi_bounds[1]]
+            elif t_full.size != span:
+                raise ValueError(
+                    f"With roi, template length must match either the full "
+                    f"profile ({N}) or the roi span ({span}); got {t_full.size}."
+                )
         x = x[roi_bounds[0] : roi_bounds[1]]
         N = x.size
 

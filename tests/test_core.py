@@ -301,6 +301,18 @@ class TestEdgeCases:
         assert full.amplitude == pytest.approx(presliced.amplitude, rel=1e-9)
         assert full.amplitude == pytest.approx(1.0, rel=0.1)
 
+    def test_template_roi_length_mismatch_raises(self):
+        """A template combined with roi whose length matches neither the full
+        profile nor the roi span cannot be aligned to the window, so it must
+        raise rather than silently project onto mismatched samples."""
+        N = 200
+        x = np.arange(N, dtype=float)
+        clean = np.exp(-0.5 * ((x - 100.0) / 10.0) ** 2)
+        rng = np.random.default_rng(0)
+        y = clean + rng.normal(0, 0.05, N)
+        with pytest.raises(ValueError, match="template length must match"):
+            fft_cnr(y, template=clean[:150], roi=(70, 130))
+
     def test_generalized_gaussian_fallback(self):
         """When curve_fit fails, should fall back to peak method."""
         rng = np.random.default_rng(42)
