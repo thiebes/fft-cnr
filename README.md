@@ -266,7 +266,7 @@ advanced inspection.
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
-| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), and `roi` bounds when set |
+| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), and `roi` bounds when set |
 | `noise_model` | `NoiseModel \| None` | Fitted noise structure (`None` unless requested) |
 
 ## Parameters

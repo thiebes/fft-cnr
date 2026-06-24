@@ -511,6 +511,13 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
 _LOWFREQ_OFFPEAK_HALFWIDTH_FRAC = 0.25
 _LOWFREQ_DOMINANCE_THRESHOLD = 2.5
 
+# Peak-path sign ambiguity: the largest-magnitude read picks one feature, but a
+# competing excursion of the opposite sign at least this fraction of the chosen
+# magnitude could flip the amplitude (and its sign) under noise/baseline jitter.
+# A localized rival is not low-frequency baseline structure, so it would not trip
+# the lowfreq guard; this flag surfaces the switch the off-peak ratio cannot.
+_AMPLITUDE_SIGN_AMBIGUOUS_FRAC = 0.5
+
 # Auto-roi window sizing: half-width is the feature's half-prominence width
 # scaled by this factor (1.1 FWHM is about +/- 2.5 sigma), floored so a very
 # narrow feature still yields a usable window, and the total span is never
@@ -762,11 +769,18 @@ def fft_cnr(
         matched-filter (``template``) path, where the template defines the
         signal and the off-peak statistic does not apply.
 
+        The localized-peak methods also carry ``amplitude_sign_ambiguous``:
+        true when an opposite-sign excursion at least half the chosen feature's
+        magnitude rivals it, so the largest-magnitude read could switch features
+        (and flip the amplitude sign) under noise. It is False on the
+        matched-filter path, where the template fixes the feature.
+
     Raises
     ------
     ValueError
-        If the input profile has fewer than 16 points, or a region of interest
-        spans fewer than 16 points.
+        If the input profile has fewer than 16 points, a region of interest
+        spans fewer than 16 points, or a supplied ``template`` is constant
+        after mean-subtraction (the matched filter is then undefined).
     """
     x = np.asarray(x, float).ravel()
     N = x.size
@@ -859,6 +873,11 @@ def fft_cnr(
         tw = t * w
         xw = x * w
         denom = float(np.sum(tw * tw))
+        if denom == 0.0:
+            raise ValueError(
+                "template has no variation after mean-subtraction "
+                "(constant template); the matched filter is undefined."
+            )
         Amp = float(np.sum(xw * tw) / denom)
         # Exact standard error of the projection under white noise of level
         # sigma: var(Amp) = sigma**2 * sum(w**2 * tw**2) / denom**2, which
@@ -876,6 +895,7 @@ def fft_cnr(
         # Default: non-parametric peak read from the low-pass reconstruction.
         amp_method = "peak"
 
+    amplitude_sign_ambiguous = False
     if amp_method in ("peak", "generalized_gaussian_fit_fallback"):
         margin = max(1, N // 4)
         x_raw = x + x_mean
@@ -886,6 +906,15 @@ def fft_cnr(
         dev = (x_lp + x_mean) - baseline
         Amp = float(dev[int(np.argmax(np.abs(dev)))])
         Amp_se = float(sigma / np.sqrt(max(1, kc_full)))
+        # Flag when an opposite-sign excursion rivals the chosen feature: the
+        # largest-magnitude read could then switch features (and flip the sign)
+        # under noise, and a localized rival does not trip lowfreq_dominated.
+        opposite = dev * np.sign(Amp) < 0
+        if np.any(opposite):
+            rival = float(np.max(np.abs(dev[opposite])))
+            amplitude_sign_ambiguous = bool(
+                rival > _AMPLITUDE_SIGN_AMBIGUOUS_FRAC * abs(Amp)
+            )
 
     # CNR and confidence interval (delta-method)
     cnr_val = np.inf if sigma == 0 else float(np.abs(Amp) / sigma)
@@ -922,6 +951,7 @@ def fft_cnr(
         "amplitude_method": amp_method,
         "lowfreq_offpeak_ratio": offpeak_ratio,
         "lowfreq_dominated": lowfreq_dominated,
+        "amplitude_sign_ambiguous": amplitude_sign_ambiguous,
     }
     if roi_bounds is not None:
         diags["roi"] = roi_bounds

@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diagnostics["lowfreq_dominated"]` (with `lowfreq_offpeak_ratio`) flags
   profiles where smooth baseline structure away from the peak dominates, so the
   reported `cnr` may reflect baseline power rather than the peak.
+- `diagnostics["amplitude_sign_ambiguous"]` on the peak and generalized-Gaussian
+  methods: true when an opposite-sign excursion at least half the chosen
+  feature's magnitude rivals it, so the largest-magnitude read could switch
+  features and flip the amplitude sign. It covers the localized competitor that
+  `lowfreq_dominated` does not, since a narrow rival is not low-frequency
+  baseline structure.
 - `scripts/validate_iscat_baseline.py`: Monte Carlo validation of the baseline
   guard against an interferometric scattering microscopy (iSCAT) surrogate with
   structured residual background. It documents that broadband structured
@@ -44,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   feature, so a downward (absorption / dark-contrast) feature is found and
   `amplitude` carries its sign. `cnr` is unchanged: it uses the amplitude
   magnitude, and `NoiseModel.peak_snr` does the same.
+- A `template` that is constant after mean-subtraction now raises `ValueError`
+  rather than returning a silent all-NaN result: the matched-filter projection
+  is undefined when the template has no variation.
 
 ### Documentation
 

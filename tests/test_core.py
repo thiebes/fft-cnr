@@ -313,6 +313,17 @@ class TestEdgeCases:
         with pytest.raises(ValueError, match="template length must match"):
             fft_cnr(y, template=clean[:150], roi=(70, 130))
 
+    def test_constant_template_raises(self):
+        """A constant template is all zeros after mean-subtraction, so the
+        matched-filter denominator is zero. The estimate is undefined and must
+        raise rather than return a silent all-NaN result."""
+        rng = np.random.default_rng(0)
+        N = 200
+        x = np.arange(N, dtype=float)
+        y = np.exp(-0.5 * ((x - 100.0) / 10.0) ** 2) + rng.normal(0, 0.1, N)
+        with pytest.raises(ValueError, match="constant template"):
+            fft_cnr(y, template=np.ones(N))
+
     def test_generalized_gaussian_fallback(self):
         """When curve_fit fails, should fall back to peak method."""
         rng = np.random.default_rng(42)
@@ -790,3 +801,34 @@ class TestLowFreqBaseline:
         assert fft_cnr(clean).diagnostics[
             "lowfreq_offpeak_ratio"
         ] == pytest.approx(0.3967, rel=1e-2)
+
+    def test_sign_ambiguous_false_on_clean_peak(self):
+        """A clean localized peak has no opposite-sign rival, so the
+        largest-magnitude read is unambiguous."""
+        rng = np.random.default_rng(1)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y)
+        assert result.diagnostics["amplitude_sign_ambiguous"] is False
+
+    def test_sign_ambiguous_on_competing_opposite_feature(self):
+        """A localized opposite-sign excursion that rivals the chosen feature is
+        not low-frequency baseline structure, so lowfreq_dominated stays False.
+        The ambiguity flag is the only signal that the largest-magnitude read
+        has switched to the dip and flipped the amplitude sign."""
+        rng = np.random.default_rng(0)
+        x = np.arange(self.N, dtype=float)
+        peak = 5.0 * np.exp(-0.5 * ((x - 100.0) / 6.0) ** 2)
+        dip = -6.0 * np.exp(-0.5 * ((x - 130.0) / 6.0) ** 2)
+        y = peak + dip + rng.normal(0, 0.5, self.N)
+        result = fft_cnr(y)
+        assert result.amplitude < 0  # read switched to the deeper dip
+        assert result.diagnostics["amplitude_sign_ambiguous"] is True
+        assert result.diagnostics["lowfreq_dominated"] is False
+
+    def test_sign_ambiguous_false_on_template_path(self):
+        """The matched filter fixes the feature through the template, so the
+        sign-ambiguity flag does not apply and stays False."""
+        rng = np.random.default_rng(2)
+        clean = self._peak(20.0)
+        result = fft_cnr(clean + rng.normal(0, 1.0, self.N), template=clean)
+        assert result.diagnostics["amplitude_sign_ambiguous"] is False
