@@ -669,6 +669,18 @@ class TestLowFreqBaseline:
         assert start < 100 < stop  # window brackets the true peak center
         assert result.cnr == pytest.approx(20.0, rel=0.2)
 
+    def test_auto_roi_tracks_dominant_dip(self):
+        """A downward (absorption / dark-contrast) feature must be located and
+        read end to end: the window brackets the dip, the CNR matches its depth,
+        and the amplitude carries the negative sign."""
+        rng = np.random.default_rng(8)
+        y = self._peak(-20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y, roi="auto")
+        start, stop = result.diagnostics["roi"]
+        assert start < 100 < stop  # window brackets the true dip center
+        assert result.cnr == pytest.approx(20.0, rel=0.2)
+        assert result.amplitude < 0
+
     def test_roi_too_short_raises(self):
         rng = np.random.default_rng(6)
         y = self._peak(20.0) + rng.normal(0, 1.0, self.N)

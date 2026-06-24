@@ -579,17 +579,24 @@ def _resolve_roi(
             fallback_cut_frac=fallback_cut_frac,
         )
         x_lp = pre.x_lp
-        peak_idx = int(np.argmax(x_lp))
-        # Full width at half prominence, measured on the reconstruction.
+        # Locate the largest-magnitude feature (peak or dip) and measure its
+        # full width at half prominence on the reconstruction. Working on the
+        # signed deviation from the baseline handles a downward (absorption)
+        # feature the same way as an upward one.
         baseline = float(np.median(x_lp))
-        half_level = baseline + 0.5 * (x_lp[peak_idx] - baseline)
-        left = peak_idx
-        while left > 0 and x_lp[left] > half_level:
-            left -= 1
-        right = peak_idx
-        while right < N - 1 and x_lp[right] > half_level:
-            right += 1
-        fwhm = max(2, right - left)
+        dev = x_lp - baseline
+        peak_idx = int(np.argmax(np.abs(dev)))
+        peak_dev = float(dev[peak_idx])
+        if peak_dev == 0.0:
+            fwhm = 2
+        else:
+            left = peak_idx
+            while left > 0 and dev[left] / peak_dev > 0.5:
+                left -= 1
+            right = peak_idx
+            while right < N - 1 and dev[right] / peak_dev > 0.5:
+                right += 1
+            fwhm = max(2, right - left)
         # FWHM is ~2.355 sigma; ~2.5 sigma each side (about 1.1 FWHM) keeps the
         # peak and its shoulders while dropping off-center structure. Enforce a
         # usable span and slide it inside the profile so a peak near an edge
@@ -669,8 +676,9 @@ def fft_cnr(
     roi : str, tuple[int, int], or None
         Restrict the estimate to a region of interest. ``None`` (default)
         uses the full profile. A ``(start, stop)`` index pair estimates on
-        that slice. ``"auto"`` locates the peak and takes a window scaled to
-        the peak's own width (about +/- 2.5 sigma). Windowing removes
+        that slice. ``"auto"`` locates the largest feature (peak or dip) and
+        takes a window scaled to its own width (about +/- 2.5 sigma). Windowing
+        removes
         off-center low-frequency baseline structure that would otherwise be
         counted as signal; the chosen bounds are reported in
         ``diagnostics["roi"]``. ``"auto"`` locates the largest feature, so when
@@ -805,11 +813,14 @@ def fft_cnr(
         amp_method = "peak"
 
     if amp_method in ("peak", "generalized_gaussian_fit_fallback"):
-        peak_val = float(np.max(x_lp)) + x_mean
         margin = max(1, N // 4)
         x_raw = x + x_mean
         baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
-        Amp = peak_val - baseline
+        # Read the largest-magnitude excursion from the baseline so a negative
+        # (absorption / dark-contrast) feature is measured with the right sign;
+        # for a positive peak this is the peak height, unchanged.
+        dev = (x_lp + x_mean) - baseline
+        Amp = float(dev[int(np.argmax(np.abs(dev)))])
         Amp_se = float(sigma / np.sqrt(max(1, kc_full)))
 
     # CNR and confidence interval (delta-method)
