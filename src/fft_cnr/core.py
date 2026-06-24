@@ -507,6 +507,14 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
 _LOWFREQ_OFFPEAK_HALFWIDTH_FRAC = 0.25
 _LOWFREQ_DOMINANCE_THRESHOLD = 2.5
 
+# Auto-roi window sizing: half-width is the feature's half-prominence width
+# scaled by this factor (1.1 FWHM is about +/- 2.5 sigma), floored so a very
+# narrow feature still yields a usable window, and the total span is never
+# allowed below the minimum profile length the estimator accepts.
+_ROI_HALFWIDTH_FWHM_FACTOR = 1.1
+_ROI_HALFWIDTH_FLOOR = 8
+_MIN_ROI_SPAN = 16
+
 
 def _lowfreq_offpeak_ratio(x_lp: np.ndarray, sigma: float) -> float:
     """Off-peak low-frequency structure relative to the noise RMS.
@@ -601,18 +609,31 @@ def _resolve_roi(
         # peak and its shoulders while dropping off-center structure. Enforce a
         # usable span and slide it inside the profile so a peak near an edge
         # (common when there is no real peak to find) still yields a window.
-        half_width = max(8, int(round(1.1 * fwhm)))
-        span = min(N, max(16, 2 * half_width + 1))
+        half_width = max(
+            _ROI_HALFWIDTH_FLOOR, int(round(_ROI_HALFWIDTH_FWHM_FACTOR * fwhm))
+        )
+        span = min(N, max(_MIN_ROI_SPAN, 2 * half_width + 1))
         start = max(0, min(peak_idx - span // 2, N - span))
         stop = start + span
     else:
-        start, stop = (int(v) for v in roi)
+        bounds = tuple(int(v) for v in roi)
+        if len(bounds) != 2:
+            raise ValueError(
+                f"Region of interest must be 'auto' or a (start, stop) pair; "
+                f"got {len(bounds)} values."
+            )
+        start, stop = bounds
+        if stop <= start:
+            raise ValueError(
+                f"Region of interest bounds must be increasing; got "
+                f"(start={start}, stop={stop})."
+            )
         start = max(0, start)
         stop = min(N, stop)
-        if stop - start < 16:
+        if stop - start < _MIN_ROI_SPAN:
             raise ValueError(
-                "Region of interest spans fewer than 16 points; widen the "
-                "window or pass the full profile."
+                f"Region of interest spans fewer than {_MIN_ROI_SPAN} points; "
+                f"widen the window or pass the full profile."
             )
     return start, stop
 

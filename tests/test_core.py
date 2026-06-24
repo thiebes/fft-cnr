@@ -692,3 +692,46 @@ class TestLowFreqBaseline:
         y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
         with pytest.raises(ValueError, match="Unsupported roi"):
             fft_cnr(y, roi="peak")
+
+    def test_reversed_roi_bounds_raise(self):
+        rng = np.random.default_rng(10)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="must be increasing"):
+            fft_cnr(y, roi=(130, 70))
+
+    def test_wrong_length_roi_raises(self):
+        rng = np.random.default_rng(11)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="must be 'auto' or a"):
+            fft_cnr(y, roi=(70, 100, 130))
+
+    def test_auto_roi_misses_peak_when_offcenter_baseline_is_larger(self):
+        """Documented limitation: ``"auto"`` locates the largest feature, so an
+        off-center baseline that exceeds the peak of interest captures the
+        window. Explicit bounds are the remedy and recover the peak's CNR."""
+        rng = np.random.default_rng(12)
+        x = np.arange(self.N, dtype=float)
+        # Bump away from the peak at index 100, larger than the peak itself.
+        bump = 30.0 * np.exp(-0.5 * ((x - 30) / 12.0) ** 2)
+        y = self._peak(20.0) + bump + rng.normal(0, 1.0, self.N)
+        auto = fft_cnr(y, roi="auto")
+        a_start, a_stop = auto.diagnostics["roi"]
+        assert not (a_start < 100 < a_stop)  # auto misses the intended peak
+        explicit = fft_cnr(y, roi=(70, 130))
+        assert explicit.cnr == pytest.approx(20.0, rel=0.25)
+
+    def test_offpeak_ratio_pinned_values(self):
+        """Pin the off-peak ratio so a change to the off-peak window fraction or
+        the baseline subtraction cannot shift the dominance calibration
+        silently. Deterministic (fixed seed); a change here means the guard was
+        recalibrated and must be re-checked against scripts/validate_iscat_baseline.py."""
+        rng = np.random.default_rng(0)
+        baseline = self._baseline() + rng.normal(0, 1.0, self.N)
+        assert fft_cnr(baseline).diagnostics[
+            "lowfreq_offpeak_ratio"
+        ] == pytest.approx(3.6634, rel=1e-3)
+        rng = np.random.default_rng(1)
+        clean = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        assert fft_cnr(clean).diagnostics[
+            "lowfreq_offpeak_ratio"
+        ] == pytest.approx(0.3967, rel=1e-2)
