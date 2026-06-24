@@ -41,23 +41,11 @@ import sys
 
 import numpy as np
 
+from _signals import METHODS, _gaussian
 from fft_cnr import fft_cnr
 
-
-# ---------------------------------------------------------------------------
-# Signal generator (Gaussian; the cross-method comparison is well posed here
-# for all three amplitude paths, matching validate_amplitude_se.py Table 3).
-# ---------------------------------------------------------------------------
-
-def _gaussian(N, amplitude, sigma, noise_std, seed):
-    rng = np.random.default_rng(seed)
-    x = np.arange(N, dtype=float)
-    center = (N - 1) / 2.0
-    clean = amplitude * np.exp(-0.5 * ((x - center) / sigma) ** 2)
-    return clean + rng.normal(0, noise_std, N), clean
-
-
-METHODS = ["peak", "generalized_gaussian", "matched_filter"]
+# The Gaussian cross-method comparison is well posed for all three amplitude
+# paths, matching validate_amplitude_se.py Table 3.
 
 
 def _ci_terms(result):

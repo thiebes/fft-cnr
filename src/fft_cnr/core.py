@@ -397,16 +397,13 @@ def _estimate_noise_model(
         ``var_signal_p`` (rank p-value of the gain against the null) or
         ``noise_model_skipped`` (reason the fit was not attempted).
     """
-    n_null = 199
-    test_level = 0.05
-    min_range_in_sigmas = 3.0
     if rng is None:
         rng = np.random.default_rng(0)
 
     signal_estimate = decomp.x_lp + decomp.x_mean
     residual = decomp.x - decomp.x_lp
 
-    if float(np.ptp(signal_estimate)) < min_range_in_sigmas * decomp.sigma:
+    if float(np.ptp(signal_estimate)) < _NOISE_MODEL_MIN_RANGE_SIGMAS * decomp.sigma:
         model = NoiseModel(
             read=float("nan"),
             gain=float("nan"),
@@ -426,8 +423,8 @@ def _estimate_noise_model(
     )
 
     N = decomp.x.size
-    null_gains = np.empty(n_null)
-    for i in range(n_null):
+    null_gains = np.empty(_NOISE_MODEL_NULL_DRAWS)
+    for i in range(_NOISE_MODEL_NULL_DRAWS):
         y = signal_estimate + rng.normal(0.0, decomp.sigma, N)
         d = _spectral_decomposition(
             y,
@@ -442,13 +439,13 @@ def _estimate_noise_model(
             d.x_lp + d.x_mean, d.x - d.x_lp, d.frac_kept
         )
 
-    p_value = float((1 + np.sum(null_gains >= gain)) / (n_null + 1))
+    p_value = float((1 + np.sum(null_gains >= gain)) / (_NOISE_MODEL_NULL_DRAWS + 1))
     model = NoiseModel(
         read=float(np.sqrt(max(0.0, read2))),
         gain=gain,
         spectral_exponent=float("nan"),
         white_floor=float("nan"),
-        signal_dependent=bool(p_value <= test_level),
+        signal_dependent=bool(p_value <= _NOISE_MODEL_TEST_LEVEL),
         correlated=None,
     )
     return model, {"var_signal_p": p_value}
@@ -521,6 +518,14 @@ _LOWFREQ_DOMINANCE_THRESHOLD = 2.5
 _ROI_HALFWIDTH_FWHM_FACTOR = 1.1
 _ROI_HALFWIDTH_FLOOR = 8
 _MIN_ROI_SPAN = 16
+
+# Noise-model detector (_estimate_noise_model): number of parametric-bootstrap
+# null realizations, the significance level for the gain rank test, and the
+# minimum signal range (in noise-RMS units) below which the photon-transfer
+# fit is skipped as unconstrained.
+_NOISE_MODEL_NULL_DRAWS = 199
+_NOISE_MODEL_TEST_LEVEL = 0.05
+_NOISE_MODEL_MIN_RANGE_SIGMAS = 3.0
 
 
 def _feature_peak_and_width(x_lp: np.ndarray) -> tuple[int, int]:
