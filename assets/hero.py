@@ -6,8 +6,8 @@ spectrum, where the method finds the knee that separates signal from noise.
 Zeroing the bins above the knee and inverting gives the smooth reconstruction
 whose peak, divided by the noise RMS, is the CNR.
 
-Every annotated number is read from a real ``fft_cnr`` run on the README
-quick-start profile (Gaussian peak in white noise, seed 0), so the picture
+Every annotated number is read from a real ``fft_cnr`` run on the demo profile
+defined below (a narrow Gaussian peak in white noise, seed 0), so the picture
 stays correct if the method changes.
 
 The hero uses a Tufte range-frame: open top/right spines, with the remaining

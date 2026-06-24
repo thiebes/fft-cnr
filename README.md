@@ -8,6 +8,8 @@
 
 FFT-based contrast-to-noise ratio estimation from a single frame.
 
+![Two panels illustrating fft-cnr: a noisy 1-D intensity profile with its recovered signal, amplitude, noise band, and CNR with a 95% confidence interval (left); and the profile's power spectrum split at the AIC-detected signal/noise knee (right).](https://raw.githubusercontent.com/thiebes/fft-cnr/main/assets/hero.png)
+
 Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
 single acquisition. You do not need repeat frames or a separate background
 region.
