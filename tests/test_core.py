@@ -482,6 +482,22 @@ class TestNoiseModel:
         )
         assert model.peak_snr(10.0) == pytest.approx(5.0)
 
+    def test_peak_snr_negative_amplitude_uses_magnitude(self):
+        """A negative (dip / dark-contrast) amplitude must give the same finite,
+        positive SNR as a peak of equal depth, not a NaN from a negative
+        radicand. The peak amplitude read can return a signed value, and
+        peak_snr is documented as the recommended read on that path."""
+        model = NoiseModel(
+            read=0.0,
+            gain=0.01,
+            spectral_exponent=float("nan"),
+            white_floor=float("nan"),
+            signal_dependent=True,
+            correlated=None,
+        )
+        assert model.peak_snr(-100.0) == pytest.approx(model.peak_snr(100.0))
+        assert np.isfinite(model.peak_snr(-100.0))
+
 
 class TestNoiseModelDetection:
     """Tests for the real-space (signal-dependence) noise-model detector."""

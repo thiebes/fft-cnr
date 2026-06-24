@@ -58,8 +58,13 @@ class NoiseModel:
     correlated: bool | None
 
     def peak_snr(self, amplitude: float) -> float:
-        """Peak signal-to-noise ratio under the fitted real-space noise model."""
-        return float(amplitude / np.sqrt(self.gain * amplitude + self.read**2))
+        """Peak signal-to-noise ratio under the fitted real-space noise model.
+
+        Uses the amplitude magnitude, so a negative (absorption / dark-contrast)
+        amplitude gives the same positive SNR as a peak of equal depth.
+        """
+        a = abs(amplitude)
+        return float(a / np.sqrt(self.gain * a + self.read**2))
 
 
 @dataclass
@@ -73,7 +78,9 @@ class CNREstimate:
     cnr_ci95 : tuple[float, float]
         95% confidence interval on CNR (delta-method approximation).
     amplitude : float
-        Estimated signal amplitude.
+        Estimated signal amplitude. Signed on the peak path: negative for a
+        downward (absorption / dark-contrast) feature. ``cnr`` uses its
+        magnitude.
     amplitude_se : float
         Standard error of the amplitude estimate (NaN if unavailable). On the
         matched-filter and generalized-Gaussian paths this is a derived
@@ -699,9 +706,8 @@ def fft_cnr(
         uses the full profile. A ``(start, stop)`` index pair estimates on
         that slice. ``"auto"`` locates the largest feature (peak or dip) and
         takes a window scaled to its own width (about +/- 2.5 sigma). Windowing
-        removes
-        off-center low-frequency baseline structure that would otherwise be
-        counted as signal; the chosen bounds are reported in
+        removes off-center low-frequency baseline structure that would otherwise
+        be counted as signal; the chosen bounds are reported in
         ``diagnostics["roi"]``. ``"auto"`` locates the largest feature, so when
         an off-center baseline exceeds the peak of interest, pass explicit
         bounds instead. The window must span at least 16 points.

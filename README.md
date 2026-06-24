@@ -260,7 +260,7 @@ advanced inspection.
 | -------------- | ---------------------- | --------------------------------------------------- |
 | `cnr` | `float` | Estimated contrast-to-noise ratio |
 | `cnr_ci95` | `tuple[float, float]` | 95% confidence interval on CNR |
-| `amplitude` | `float` | Signal amplitude estimate |
+| `amplitude` | `float` | Signal amplitude estimate (signed on the peak path: negative for a dip) |
 | `amplitude_se` | `float` | Standard error of the amplitude estimate |
 | `amplitude_snr` | `float` (property) | Matched-filter SNR (amplitude over its standard error); NaN on the peak and generalized-Gaussian paths |
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |

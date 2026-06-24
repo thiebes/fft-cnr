@@ -10,10 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `roi` parameter to `fft_cnr`: restrict the estimate to a region of interest,
-  as explicit `(start, stop)` bounds or `"auto"` (a window sized to the peak).
-  Windowing removes off-center low-frequency baseline structure that would
-  otherwise be counted as signal (issue #7). The resolved bounds are reported
-  in `diagnostics["roi"]`.
+  as explicit `(start, stop)` bounds or `"auto"` (a window sized to the largest
+  feature, peak or dip). Windowing removes off-center low-frequency baseline
+  structure that would otherwise be counted as signal (issue #7). The resolved
+  bounds are reported in `diagnostics["roi"]`.
 - Low-frequency baseline guard on the peak and generalized-Gaussian methods:
   `diagnostics["lowfreq_dominated"]` (with `lowfreq_offpeak_ratio`) flags
   profiles where smooth baseline structure away from the peak dominates, so the
@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `amplitude_snr` is now defined only on the matched-filter (template) path and
   returns NaN on the peak and generalized-Gaussian paths, where the standard
   error is a different quantity that is not comparable to it.
+- The peak amplitude read and `roi="auto"` now locate the largest-magnitude
+  feature, so a downward (absorption / dark-contrast) feature is found and
+  `amplitude` carries its sign. `cnr` is unchanged: it uses the amplitude
+  magnitude, and `NoiseModel.peak_snr` does the same.
 
 ### Documentation
 
