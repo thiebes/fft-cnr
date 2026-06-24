@@ -286,6 +286,21 @@ class TestEdgeCases:
         assert result.diagnostics["amplitude_method"] == "matched_filter"
         assert np.isfinite(result.cnr)
 
+    def test_full_length_template_aligned_to_roi(self):
+        """A full-profile template combined with roi must be sliced to the same
+        window as the data, not truncated from its start. Otherwise the matched
+        filter projects onto the wrong samples and the amplitude explodes. The
+        full-length template must give the same result as a pre-sliced one."""
+        N = 200
+        x = np.arange(N, dtype=float)
+        clean = np.exp(-0.5 * ((x - 100.0) / 10.0) ** 2)
+        rng = np.random.default_rng(0)
+        y = clean + rng.normal(0, 0.05, N)
+        full = fft_cnr(y, template=clean, roi=(70, 130))
+        presliced = fft_cnr(y, template=clean[70:130], roi=(70, 130))
+        assert full.amplitude == pytest.approx(presliced.amplitude, rel=1e-9)
+        assert full.amplitude == pytest.approx(1.0, rel=0.1)
+
     def test_generalized_gaussian_fallback(self):
         """When curve_fit fails, should fall back to peak method."""
         rng = np.random.default_rng(42)
@@ -677,6 +692,18 @@ class TestLowFreqBaseline:
         assert full.diagnostics["lowfreq_dominated"] is True
         assert windowed.diagnostics["lowfreq_dominated"] is False
 
+    def test_auto_roi_does_not_false_flag_clean_peak(self):
+        """The off-peak exclusion scales to the feature width, so windowing a
+        clean peak with roi="auto" must not raise lowfreq_dominated: the tight
+        window leaves no off-peak region, and the flag stays False (the contract
+        that the guard does not false-fire on a clean peak, now under auto-roi)."""
+        x = np.arange(self.N, dtype=float)
+        for seed in range(8):
+            rng = np.random.default_rng(seed)
+            y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+            result = fft_cnr(y, roi="auto")
+            assert result.diagnostics["lowfreq_dominated"] is False
+
     def test_auto_roi_tracks_dominant_peak(self):
         rng = np.random.default_rng(5)
         y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
@@ -745,7 +772,7 @@ class TestLowFreqBaseline:
         baseline = self._baseline() + rng.normal(0, 1.0, self.N)
         assert fft_cnr(baseline).diagnostics[
             "lowfreq_offpeak_ratio"
-        ] == pytest.approx(3.6634, rel=1e-3)
+        ] == pytest.approx(3.6869, rel=1e-3)
         rng = np.random.default_rng(1)
         clean = self._peak(20.0) + rng.normal(0, 1.0, self.N)
         assert fft_cnr(clean).diagnostics[

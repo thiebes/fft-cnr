@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README section "Low-frequency baseline and structured background" describing
   the guard, `roi`, the iSCAT scope limit, and the matched-filter recommendation.
+- README "References", "Contributing and community", and "Development disclosure"
+  sections, and a Tests CI badge.
 
 ## [0.2.1] - 2026-06-14
 

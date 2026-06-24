@@ -78,9 +78,9 @@ class CNREstimate:
     cnr_ci95 : tuple[float, float]
         95% confidence interval on CNR (delta-method approximation).
     amplitude : float
-        Estimated signal amplitude. Signed on the peak path: negative for a
-        downward (absorption / dark-contrast) feature. ``cnr`` uses its
-        magnitude.
+        Estimated signal amplitude. Signed on the peak and generalized-Gaussian
+        paths: negative for a downward (absorption / dark-contrast) feature.
+        ``cnr`` uses its magnitude.
     amplitude_se : float
         Standard error of the amplitude estimate (NaN if unavailable). On the
         matched-filter and generalized-Gaussian paths this is a derived
@@ -523,6 +523,30 @@ _ROI_HALFWIDTH_FLOOR = 8
 _MIN_ROI_SPAN = 16
 
 
+def _feature_peak_and_width(x_lp: np.ndarray) -> tuple[int, int]:
+    """Locate the largest-magnitude feature and measure its half-prominence width.
+
+    Both are measured on the signed deviation from the median, so a downward
+    (absorption / dark-contrast) feature is handled the same way as an upward
+    one. Returns ``(peak_idx, width)`` with ``width >= 2``; ``width`` is the
+    full width at half prominence in samples. Shared by the auto-roi window
+    sizing and the off-peak ratio so the two locate the feature identically.
+    """
+    n = x_lp.size
+    dev = x_lp - float(np.median(x_lp))
+    peak_idx = int(np.argmax(np.abs(dev)))
+    peak_dev = float(dev[peak_idx])
+    if peak_dev == 0.0:
+        return peak_idx, 2
+    left = peak_idx
+    while left > 0 and dev[left] / peak_dev > 0.5:
+        left -= 1
+    right = peak_idx
+    while right < n - 1 and dev[right] / peak_dev > 0.5:
+        right += 1
+    return peak_idx, max(2, right - left)
+
+
 def _lowfreq_offpeak_ratio(x_lp: np.ndarray, sigma: float) -> float:
     """Off-peak low-frequency structure relative to the noise RMS.
 
@@ -537,14 +561,24 @@ def _lowfreq_offpeak_ratio(x_lp: np.ndarray, sigma: float) -> float:
     whose width approaches the profile length from a baseline -- the two are
     indistinguishable in a single frame (see ``NoiseModel``).
 
+    The excluded zone is scaled to the feature's own width (with a fixed
+    fraction of the profile as a floor), so the peak's shoulders do not leak
+    into the off-peak region. This keeps the statistic honest whether ``x_lp``
+    is the full profile or a window already cropped to the feature by ``roi``:
+    on a tight window the exclusion covers the whole feature and the off-peak
+    region vanishes, returning NaN ("not applicable") rather than a false flag.
+
     Returns NaN when the off-peak region is too small to estimate or the noise
     RMS is zero.
     """
     N = x_lp.size
     if sigma <= 0:
         return float("nan")
-    peak_idx = int(np.argmax(np.abs(x_lp)))
-    half_width = max(1, int(_LOWFREQ_OFFPEAK_HALFWIDTH_FRAC * N))
+    peak_idx, fwhm = _feature_peak_and_width(x_lp)
+    half_width = max(
+        int(_LOWFREQ_OFFPEAK_HALFWIDTH_FRAC * N),
+        int(round(_ROI_HALFWIDTH_FWHM_FACTOR * fwhm)),
+    )
     off_peak = np.abs(np.arange(N) - peak_idx) > half_width
     if int(np.sum(off_peak)) < 4:
         return float("nan")
@@ -593,25 +627,7 @@ def _resolve_roi(
             cutoff_guard=cutoff_guard,
             fallback_cut_frac=fallback_cut_frac,
         )
-        x_lp = pre.x_lp
-        # Locate the largest-magnitude feature (peak or dip) and measure its
-        # full width at half prominence on the reconstruction. Working on the
-        # signed deviation from the baseline handles a downward (absorption)
-        # feature the same way as an upward one.
-        baseline = float(np.median(x_lp))
-        dev = x_lp - baseline
-        peak_idx = int(np.argmax(np.abs(dev)))
-        peak_dev = float(dev[peak_idx])
-        if peak_dev == 0.0:
-            fwhm = 2
-        else:
-            left = peak_idx
-            while left > 0 and dev[left] / peak_dev > 0.5:
-                left -= 1
-            right = peak_idx
-            while right < N - 1 and dev[right] / peak_dev > 0.5:
-                right += 1
-            fwhm = max(2, right - left)
+        peak_idx, fwhm = _feature_peak_and_width(pre.x_lp)
         # FWHM is ~2.355 sigma; ~2.5 sigma each side (about 1.1 FWHM) keeps the
         # peak and its shoulders while dropping off-center structure. Enforce a
         # usable span and slide it inside the profile so a peak near an edge
@@ -664,8 +680,8 @@ def fft_cnr(
     """Estimate contrast-to-noise ratio from a single 1-D profile using FFT methods.
 
     Uses unitary FFT normalization, Welch PSD estimation with degrees-of-freedom
-    tracking, AIC-based objective cutoff selection, whitened matched-filter amplitude
-    estimation, and analytical confidence intervals.
+    tracking, AIC-based objective cutoff selection, white-noise matched-filter
+    amplitude estimation, and analytical confidence intervals.
 
     Parameters
     ----------
@@ -770,6 +786,14 @@ def fft_cnr(
             cutoff_guard=cutoff_guard,
             fallback_cut_frac=fallback_cut_frac,
         )
+        # Slice a full-length template to the same window as the data so the two
+        # stay aligned; without this a full-profile template would be truncated
+        # from its start and the matched filter would project onto the wrong
+        # samples. A template already sized to the ROI is left untouched.
+        if template is not None:
+            t_full = np.asarray(template, float).ravel()
+            if t_full.size == N:
+                template = t_full[roi_bounds[0] : roi_bounds[1]]
         x = x[roi_bounds[0] : roi_bounds[1]]
         N = x.size
 
