@@ -1,11 +1,12 @@
 """Trace the amplitude standard error through to the CNR confidence interval.
 
 The companion sweep ``validate_amplitude_se.py`` shows that ``amplitude_se`` is
-miscalibrated by a different factor on each amplitude path -- most sharply on
-the matched-filter path, where a signal-contaminated power spectrum inflates
-the standard error by up to ~80x at high CNR. That sweep stops at the standard
-error. This one asks the next question: does that miscalibration actually reach
-the shipped ``cnr_ci95``, or is it swallowed by the chi-squared noise term?
+calibrated differently on each amplitude path: the matched filter returns the
+exact closed-form error of its white-noise projection, while the peak path uses
+the proxy ``sigma / sqrt(kc_full)`` that understates the empirical scatter. That
+sweep stops at the standard error. This one asks the next question: does an
+amplitude-SE miscalibration actually reach the shipped ``cnr_ci95``, or is it
+swallowed by the chi-squared noise term?
 
 The delta-method interval in ``fft_cnr`` combines two variance terms (see
 ``core.py``)::

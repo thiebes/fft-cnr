@@ -262,7 +262,7 @@ advanced inspection.
 | `cnr_ci95` | `tuple[float, float]` | 95% confidence interval on CNR |
 | `amplitude` | `float` | Signal amplitude estimate |
 | `amplitude_se` | `float` | Standard error of the amplitude estimate |
-| `amplitude_snr` | `float` (property) | Amplitude over its standard error; equals the matched-filter SNR with a template; NaN when no standard error is available |
+| `amplitude_snr` | `float` (property) | Matched-filter SNR (amplitude over its standard error); NaN on the peak and generalized-Gaussian paths |
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
@@ -354,13 +354,13 @@ degrees of freedom used for the chi-squared noise interval are set
 conservatively, so that term, and the combined interval, come out wider than
 nominal.
 
-For the matched-filter method (a supplied template) the amplitude term dominates
-instead, and its standard error is presently overstated: the filter is whitened
-by a noise spectrum estimated from the signal-containing data, which inflates
-the apparent uncertainty in the amplitude band. The matched-filter interval is
-therefore wider than the others even though the matched filter gives the most
-precise amplitude estimate. The amplitude estimate itself is accurate; only its
-error bar is too large (tracked in issue #4).
+For the matched-filter method (a supplied template) the amplitude standard error
+is the exact closed-form error of the white-noise projection: the windowed data
+projected onto the windowed template, with error sigma divided by the template
+norm for a flat window. The noise term still dominates the combined interval at
+the conservative degrees of freedom above, so the matched-filter interval comes
+out comparable in width to the others while resting on the most precise amplitude
+estimate.
 
 ### Noise model detection
 

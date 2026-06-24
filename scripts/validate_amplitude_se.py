@@ -1,10 +1,11 @@
 """Monte Carlo calibration of the amplitude standard error across paths.
 
 The reported ``amplitude_se`` (and the derived ``amplitude_snr``) is computed
-differently on each amplitude path: the whitened matched filter returns its
-exact Cramer-Rao standard error, the generalized-Gaussian fit returns the
-amplitude error from its covariance, and the default peak path returns the
-proxy ``sigma / sqrt(kc_full)`` whose calibration was never characterized.
+differently on each amplitude path: the matched filter returns the exact
+closed-form standard error of its white-noise projection (noise-only weighting),
+the generalized-Gaussian fit returns the amplitude error from its covariance,
+and the default peak path returns the proxy ``sigma / sqrt(kc_full)`` whose
+calibration was never characterized.
 
 This sweep measures, for each path, the ratio of the predicted standard error
 to the empirical standard deviation of the amplitude estimate over many noise

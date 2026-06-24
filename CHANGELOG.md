@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background is correlated noise, out of scope for the single-frame `cnr`, and
   that the matched-filter path (read through `amplitude` / `amplitude_snr`) is
   the recommended estimator in that regime.
+- `scripts/validate_amplitude_se.py` and `scripts/validate_cnr_ci_decomposition.py`:
+  Monte Carlo sweeps that calibrate the amplitude standard error per path and
+  trace it through to the CNR confidence interval.
+- Optional `assets` dependency group (matplotlib, curved-text) and
+  `assets/hero.py`, which renders the README hero image from a real `fft_cnr`
+  run.
+
+### Changed
+
+- Matched-filter standard error is now the exact closed-form error of the
+  white-noise projection (windowed data onto the windowed template, noise-only
+  weighting), replacing the `Pxx_full`-weighted form whose signal-contaminated
+  spectrum overstated the error and widened `cnr_ci95` on the template path.
+- `amplitude_snr` is now defined only on the matched-filter (template) path and
+  returns NaN on the peak and generalized-Gaussian paths, where the standard
+  error is a different quantity that is not comparable to it.
 
 ### Documentation
 
@@ -79,6 +95,7 @@ This release carries the citation metadata into the published artifact. Version
 - Initial release: FFT-based CNR estimation from single 1-D profiles, with an
   AIC-selected signal/noise frequency boundary and a 95% confidence interval.
 
+[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/thiebes/fft-cnr/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/thiebes/fft-cnr/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/thiebes/fft-cnr/compare/v0.1.0...v0.1.1
