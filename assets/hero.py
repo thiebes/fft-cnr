@@ -10,9 +10,8 @@ Every annotated number is read from a real ``fft_cnr`` run on the README
 quick-start profile (Gaussian peak in white noise, seed 0), so the picture
 stays correct if the method changes.
 
-The canonical hero is a Tufte range-frame (open spines, ticks drawn only on
-the data). Passing frame='box' to ``render`` instead yields the house-style
-boxed variant (inward ticks on four sides) at assets/hero_box.png.
+The hero uses a Tufte range-frame: open top/right spines, with the remaining
+spines drawn only across the span the data occupy.
 
 Re-render with:
 
@@ -67,6 +66,7 @@ kc = d.kc_full                                # signal/noise knee (full grid)
 sigma = result.noise_rms
 amplitude = result.amplitude
 cnr = result.cnr
+cnr_lo, cnr_hi = result.cnr_ci95             # delta-method 95% CI on the CNR
 
 # Baseline exactly as fft_cnr computes it (outer-quarter mean of the raw input).
 margin = max(1, N // 4)
@@ -131,8 +131,8 @@ fft_freq = np.arange(len(d.X)) / N
 fft_power = np.abs(d.X) ** 2 / d.w_rms**2
 
 
-def render(frame):
-    """Build and save the figure. ``frame`` is 'box' or 'range'."""
+def render():
+    """Build and save the figure."""
     fig, (axA, axB) = plt.subplots(
         1, 2, layout="constrained", figsize=(18 * inch, 7.5 * inch)
     )
@@ -179,16 +179,15 @@ def render(frame):
     # CNR headline as three columns so the two equals signs align exactly
     # (proportional fonts ignore leading-space alignment).
     cnr_y, cnr_dy, x_eq = 0.95, 0.082, 0.20
-    axA.text(x_eq - 0.05, cnr_y, "CNR", transform=axA.transAxes,
-             fontsize=FONT + 2, va="top", ha="right", color=INK,
-             fontweight="bold")
+    cnr_label = axA.text(x_eq - 0.05, cnr_y, "CNR", transform=axA.transAxes,
+                         fontsize=FONT + 2, va="top", ha="right", color=INK)
     for row, rhs in enumerate((r"$A/\sigma_{\mathrm{rms}}$", f"{cnr:.1f}")):
         yy = cnr_y - row * cnr_dy
         axA.text(x_eq, yy, "=", transform=axA.transAxes, fontsize=FONT + 2,
-                 va="top", ha="center", color=INK, fontweight="bold")
+                 va="top", ha="center", color=INK)
         axA.text(x_eq + 0.035, yy, rhs, transform=axA.transAxes,
-                 fontsize=FONT + 2, va="top", ha="left", color=INK,
-                 fontweight="bold")
+                 fontsize=FONT + 2, va="top", ha="left", color=INK)
+    # The 95% CI is placed after layout (see below), aligned under the CNR label.
 
     # "recovered signal" runs up the steep rising flank of the peak, near
     # vertical, offset to the left so it clears the blue curve. The guide is the
@@ -288,33 +287,25 @@ def render(frame):
                    fontsize=FONT)
     axB.set_ylabel(r"$\log_{10}$ power (arb. units)", fontsize=FONT)
 
-    # === Frame treatment ====================================================
-    if frame == "box":
-        # Boxed frame, inward ticks on the bottom and left only (top/right
-        # ticks add nothing here).
-        for ax in (axA, axB):
-            ax.tick_params(axis="both", which="both", direction="in",
-                           top=False, right=False, labelsize=FONT,
-                           length=4, width=1)
-    else:
-        # Tufte range-frame: drop top/right spines, draw the remaining spines
-        # only across the span the data occupy, ticks outward on two sides.
-        yA = (min(noisy.min(), baseline), max(noisy.max(), peak_y))
-        axA.set_ylim(yA[0] - 0.3, yA[1] + 0.3)
-        yB_hi = max(float(fft_power[1:].max()), float(Pxx[1:].max()))
-        spans = {axA: ((0, N - 1), yA),
-                 axB: ((fft_freq[1], welch_freq[-1]), (0.25, yB_hi))}
-        for ax, ((xlo, xhi), (ylo, yhi)) in spans.items():
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-            ax.spines["bottom"].set_bounds(xlo, xhi)
-            ax.spines["left"].set_bounds(ylo, yhi)
-            ax.tick_params(axis="both", which="major", direction="in",
-                           top=False, right=False, labelsize=FONT,
-                           length=4, width=1)
-            ax.tick_params(axis="both", which="minor", bottom=False, left=False)
+    # === Frame treatment: Tufte range-frame =================================
+    # Drop the top/right spines and draw the remaining spines only across the
+    # span the data occupy.
+    yA = (min(noisy.min(), baseline), max(noisy.max(), peak_y))
+    axA.set_ylim(yA[0] - 0.3, yA[1] + 0.3)
+    yB_hi = max(float(fft_power[1:].max()), float(Pxx[1:].max()))
+    spans = {axA: ((0, N - 1), yA),
+             axB: ((fft_freq[1], welch_freq[-1]), (0.25, yB_hi))}
+    for ax, ((xlo, xhi), (ylo, yhi)) in spans.items():
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["bottom"].set_bounds(xlo, xhi)
+        ax.spines["left"].set_bounds(ylo, yhi)
+        ax.tick_params(axis="both", which="major", direction="in",
+                       top=False, right=False, labelsize=FONT,
+                       length=4, width=1)
+        ax.tick_params(axis="both", which="minor", bottom=False, left=False)
 
-    # Per-axis value policy (both frame styles):
+    # Per-axis value policy:
     # - panel A x (position): no ticks or numbers -- the raw trace shows the
     #   resolution, and pixel index carries no message here.
     # - panel A y (intensity): keep numbers so A and sigma connect to the scale.
@@ -336,12 +327,21 @@ def render(frame):
                     bottom=True, left=True, top=False, right=False,
                     length=2, width=0.6, color="#b0b0b0")
 
-    out = "assets/hero.png" if frame == "range" else "assets/hero_box.png"
+    # The 95% CI beneath the headline, its left edge aligned with the "CNR"
+    # label (measured after layout): the CNR is a measurement with uncertainty,
+    # not a point, and here the interval is wide -- the noise term dominates.
+    fig.canvas.draw()
+    cnr_x_left = axA.transAxes.inverted().transform(
+        (cnr_label.get_window_extent().x0, 0.0))[0]
+    axA.text(cnr_x_left, cnr_y - 2 * cnr_dy - 0.02,
+             f"95% CI [{cnr_lo:.1f}, {cnr_hi:.1f}]", transform=axA.transAxes,
+             fontsize=FONT - 2, va="top", ha="left", color="#6b6f73")
+
+    out = "assets/hero.png"
     fig.savefig(out, dpi=200)
     plt.close(fig)
     return out
 
 
-for _frame in ("range", "box"):      # canonical range-frame + boxed variant
-    print("wrote", render(_frame))
+print("wrote", render())
 print(f"CNR={cnr:.1f}, A={amplitude:.2f}, sigma={sigma:.3f}, knee bin={kc}")
