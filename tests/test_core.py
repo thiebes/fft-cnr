@@ -590,3 +590,93 @@ class TestNoiseModelDetection:
         result = fft_cnr(noisy)
         assert result.noise_model is None
         assert "var_signal_p" not in result.diagnostics
+
+
+class TestLowFreqBaseline:
+    """Low-frequency-baseline guard and region-of-interest windowing (issue #7).
+
+    A smooth baseline lives entirely below the spectral knee, so it is
+    reconstructed as signal and inflates the CNR even when no peak is present.
+    The ``lowfreq_dominated`` diagnostic flags that case, and ``roi`` restricts
+    the estimate to a window where the baseline is locally negligible.
+    """
+
+    N = 200
+
+    @staticmethod
+    def _peak(amp, center=100.0, sigma=10.0):
+        x = np.arange(TestLowFreqBaseline.N, dtype=float)
+        return amp * np.exp(-0.5 * ((x - center) / sigma) ** 2)
+
+    @staticmethod
+    def _baseline():
+        x = np.arange(TestLowFreqBaseline.N, dtype=float)
+        return 6.0 * np.cos(2 * np.pi * x / 140.0 + 0.6)
+
+    def test_flag_fires_on_peakless_baseline(self):
+        """A baseline with no peak must be flagged: CNR should be ~0 but the
+        estimator reports it high, so the guard is the only signal of trouble."""
+        rng = np.random.default_rng(0)
+        y = self._baseline() + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y)
+        assert result.diagnostics["lowfreq_dominated"] is True
+        assert result.diagnostics["lowfreq_offpeak_ratio"] > 2.5
+
+    def test_flag_silent_on_clean_peak(self):
+        """A localized peak on a flat baseline must not be flagged, including
+        at marginal CNR where the ratio is independent of peak height."""
+        rng = np.random.default_rng(1)
+        for amp in (20.0, 2.0):
+            y = self._peak(amp) + rng.normal(0, 1.0, self.N)
+            result = fft_cnr(y)
+            assert result.diagnostics["lowfreq_dominated"] is False
+
+    def test_ratio_nan_on_template_path(self):
+        """The off-peak statistic assumes a localized peak; on the matched
+        filter the template defines the signal, so the ratio is NaN and the
+        flag is never set."""
+        rng = np.random.default_rng(2)
+        clean = self._peak(20.0)
+        result = fft_cnr(clean + rng.normal(0, 1.0, self.N), template=clean)
+        assert np.isnan(result.diagnostics["lowfreq_offpeak_ratio"])
+        assert result.diagnostics["lowfreq_dominated"] is False
+
+    def test_explicit_roi_records_bounds_and_restricts(self):
+        rng = np.random.default_rng(3)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y, roi=(70, 130))
+        assert result.diagnostics["roi"] == (70, 130)
+        assert result.diagnostics["N"] == 60
+
+    def test_roi_clears_flag_on_localized_baseline(self):
+        """Windowing to the peak removes off-center baseline structure, so the
+        flag set on the full profile clears on the restricted estimate."""
+        rng = np.random.default_rng(4)
+        # Baseline bump well away from the peak at index 100.
+        x = np.arange(self.N, dtype=float)
+        bump = 8.0 * np.exp(-0.5 * ((x - 30) / 12.0) ** 2)
+        y = self._peak(20.0) + bump + rng.normal(0, 1.0, self.N)
+        full = fft_cnr(y)
+        windowed = fft_cnr(y, roi=(70, 130))
+        assert full.diagnostics["lowfreq_dominated"] is True
+        assert windowed.diagnostics["lowfreq_dominated"] is False
+
+    def test_auto_roi_tracks_dominant_peak(self):
+        rng = np.random.default_rng(5)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y, roi="auto")
+        start, stop = result.diagnostics["roi"]
+        assert start < 100 < stop  # window brackets the true peak center
+        assert result.cnr == pytest.approx(20.0, rel=0.2)
+
+    def test_roi_too_short_raises(self):
+        rng = np.random.default_rng(6)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="fewer than 16"):
+            fft_cnr(y, roi=(100, 110))
+
+    def test_invalid_roi_string_raises(self):
+        rng = np.random.default_rng(7)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="Unsupported roi"):
+            fft_cnr(y, roi="peak")

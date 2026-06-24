@@ -213,6 +213,41 @@ Separating them needs a second, independent view in which the signal repeats but
 the noise does not: multiple frames, an interleaved scan, or a reference
 channel. Those are also the way to correct correlated noise once it is detected.
 
+## Low-frequency baseline and structured background
+
+A smooth baseline, a slow trend or a single low-frequency fringe, sits entirely
+below the signal/noise boundary, so `fft_cnr` reads it as signal. With a strong
+baseline the peak-method `cnr` can stay high even for a profile with no peak.
+Two tools address this:
+
+- `diagnostics["lowfreq_dominated"]` (with the underlying
+  `lowfreq_offpeak_ratio`) is true when low-frequency structure away from the
+  peak exceeds 2.5 times the noise RMS. It marks profiles where the reported
+  `cnr` may reflect baseline power rather than the peak. The flag is set on the
+  peak and generalized-Gaussian methods and is not set on the matched-filter
+  path, where the template defines the signal.
+- `roi` restricts the estimate to a window around the peak, removing off-center
+  baseline structure. Pass explicit `(start, stop)` bounds, or `"auto"` to size
+  a window to the peak. `"auto"` locates the largest feature, so pass explicit
+  bounds when an off-center baseline is larger than the peak of interest.
+
+This guard is calibrated for smooth, low-order baselines. Broadband structured
+background is a different problem. The residual speckle and fringe field left
+after interferometric scattering microscopy (iSCAT) background subtraction is
+the representative case: its power spans many spatial frequencies, including the
+high-frequency band that sets the noise estimate. It both inflates the noise
+RMS, which suppresses real peaks, and adds low-frequency amplitude, which raises
+peakless frames, so the peak-method `cnr` is unreliable and `lowfreq_dominated`
+does not detect it. This is correlated noise (see above) and cannot be
+characterized from a single frame.
+
+For this regime, use the matched filter: pass the known signal shape as
+`template` and read `amplitude` and `amplitude_snr` rather than `cnr`. The
+projection onto the template rejects background that does not match the template
+shape, so the amplitude and its SNR stay accurate where `cnr` does not. For
+iSCAT the template is the interferometric point-spread function. The
+`scripts/validate_iscat_baseline.py` simulation documents this behavior.
+
 ## Return value
 
 `fft_cnr` returns a `CNREstimate` dataclass. The first five fields are the
@@ -229,7 +264,7 @@ advanced inspection.
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
-| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params |
+| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), and `roi` bounds when set |
 | `noise_model` | `NoiseModel \| None` | Fitted noise structure (`None` unless requested) |
 
 ## Parameters
@@ -249,6 +284,7 @@ rarely need adjustment.
 | `welch_noverlap` | `None` | Welch overlap (defaults to `nperseg // 2`) |
 | `cutoff_guard` | `(0.05, 0.5)` | Fractional frequency bounds for signal/noise boundary search |
 | `fallback_cut_frac` | `0.25` | Fallback signal/noise boundary if AIC selection fails |
+| `roi` | `None` | Restrict to a region of interest: `(start, stop)` bounds or `"auto"` (see Low-frequency baseline and structured background) |
 | `return_bandpassed_noise` | `False` | Include the bandpassed noise array in diagnostics |
 | `estimate_noise_model` | `False` | Fit and test the noise model (see Noise model detection) |
 | `rng` | `None` | Generator for the noise-model test; `None` is deterministic |
