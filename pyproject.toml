@@ -32,7 +32,27 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/thiebes/fft-cnr"
 Repository = "https://github.com/thiebes/fft-cnr"
+Documentation = "https://fft-cnr.readthedocs.io"
+Issues = "https://github.com/thiebes/fft-cnr/issues"
+Changelog = "https://github.com/thiebes/fft-cnr/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+validation = [
+    "jupyter>=1.0",
+    "matplotlib>=3.7",
+    "tqdm>=4.60",
+]
+docs = [
+    "sphinx>=8.0",
+    "pydata-sphinx-theme>=0.16",
+    "myst-parser>=4.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fft_cnr"]

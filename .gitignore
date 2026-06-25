@@ -30,3 +30,6 @@ Thumbs.db
 
 # Validation (lives in fft-cnr-paper repo)
 validation/
+
+# Documentation build
+docs/_build/

@@ -3,6 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/fft-cnr.svg)](https://pypi.org/project/fft-cnr/)
 [![Python versions](https://img.shields.io/pypi/pyversions/fft-cnr.svg)](https://pypi.org/project/fft-cnr/)
 [![Tests](https://github.com/thiebes/fft-cnr/actions/workflows/test.yml/badge.svg)](https://github.com/thiebes/fft-cnr/actions/workflows/test.yml)
+[![Docs](https://readthedocs.org/projects/fft-cnr/badge/?version=latest)](https://fft-cnr.readthedocs.io/en/latest/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20691435.svg)](https://doi.org/10.5281/zenodo.20691435)
 
