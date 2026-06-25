@@ -286,6 +286,44 @@ class TestEdgeCases:
         assert result.diagnostics["amplitude_method"] == "matched_filter"
         assert np.isfinite(result.cnr)
 
+    def test_full_length_template_aligned_to_roi(self):
+        """A full-profile template combined with roi must be sliced to the same
+        window as the data, not truncated from its start. Otherwise the matched
+        filter projects onto the wrong samples and the amplitude explodes. The
+        full-length template must give the same result as a pre-sliced one."""
+        N = 200
+        x = np.arange(N, dtype=float)
+        clean = np.exp(-0.5 * ((x - 100.0) / 10.0) ** 2)
+        rng = np.random.default_rng(0)
+        y = clean + rng.normal(0, 0.05, N)
+        full = fft_cnr(y, template=clean, roi=(70, 130))
+        presliced = fft_cnr(y, template=clean[70:130], roi=(70, 130))
+        assert full.amplitude == pytest.approx(presliced.amplitude, rel=1e-9)
+        assert full.amplitude == pytest.approx(1.0, rel=0.1)
+
+    def test_template_roi_length_mismatch_raises(self):
+        """A template combined with roi whose length matches neither the full
+        profile nor the roi span cannot be aligned to the window, so it must
+        raise rather than silently project onto mismatched samples."""
+        N = 200
+        x = np.arange(N, dtype=float)
+        clean = np.exp(-0.5 * ((x - 100.0) / 10.0) ** 2)
+        rng = np.random.default_rng(0)
+        y = clean + rng.normal(0, 0.05, N)
+        with pytest.raises(ValueError, match="template length must match"):
+            fft_cnr(y, template=clean[:150], roi=(70, 130))
+
+    def test_constant_template_raises(self):
+        """A constant template is all zeros after mean-subtraction, so the
+        matched-filter denominator is zero. The estimate is undefined and must
+        raise rather than return a silent all-NaN result."""
+        rng = np.random.default_rng(0)
+        N = 200
+        x = np.arange(N, dtype=float)
+        y = np.exp(-0.5 * ((x - 100.0) / 10.0) ** 2) + rng.normal(0, 0.1, N)
+        with pytest.raises(ValueError, match="constant template"):
+            fft_cnr(y, template=np.ones(N))
+
     def test_generalized_gaussian_fallback(self):
         """When curve_fit fails, should fall back to peak method."""
         rng = np.random.default_rng(42)
@@ -367,9 +405,12 @@ class TestGridConsistencyRegression:
     def test_matched_filter_values(self):
         noisy, clean = self._fixed_signal()
         result = fft_cnr(noisy, template=clean)
-        assert result.cnr == pytest.approx(0.98003, rel=1e-4)
-        assert result.amplitude == pytest.approx(0.99181, rel=1e-4)
+        assert result.cnr == pytest.approx(0.97641, rel=1e-4)
+        assert result.amplitude == pytest.approx(0.98814, rel=1e-4)
         assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        # Pin the noise-only-whitened standard error: a regression here would
+        # signal the signal-contaminated whitening has crept back in.
+        assert result.amplitude_se == pytest.approx(0.0084777, rel=1e-3)
 
     def test_generalized_gaussian_values(self):
         noisy, _ = self._fixed_signal()
@@ -419,8 +460,31 @@ class TestAmplitudeSNR:
             noise_rms=2.0,
             noise_ci95=(1.8, 2.2),
             cutoff_index=24,
-            diagnostics={},
+            diagnostics={"amplitude_method": "matched_filter"},
         )
+        assert np.isnan(result.amplitude_snr)
+
+    def test_nan_on_peak_path(self):
+        """The peak proxy SE is uncharacterized, so it is not exposed."""
+        rng = np.random.default_rng(42)
+        N = 256
+        x = np.arange(N, dtype=float)
+        signal = 10.0 * np.exp(-0.5 * ((x - (N - 1) / 2) / 20.0) ** 2)
+        result = fft_cnr(signal + rng.normal(0, 1.0, N))
+        assert result.diagnostics["amplitude_method"] == "peak"
+        assert np.isfinite(result.amplitude_se)
+        assert np.isnan(result.amplitude_snr)
+
+    def test_nan_on_generalized_gaussian_path(self):
+        """The fit-residual SE is a different object, so it is not exposed."""
+        rng = np.random.default_rng(42)
+        N = 256
+        x = np.arange(N, dtype=float)
+        signal = 10.0 * np.exp(-0.5 * ((x - (N - 1) / 2) / 20.0) ** 2)
+        result = fft_cnr(signal + rng.normal(0, 1.0, N),
+                         fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert np.isfinite(result.amplitude_se)
         assert np.isnan(result.amplitude_snr)
 
 
@@ -455,6 +519,22 @@ class TestNoiseModel:
             correlated=None,
         )
         assert model.peak_snr(10.0) == pytest.approx(5.0)
+
+    def test_peak_snr_negative_amplitude_uses_magnitude(self):
+        """A negative (dip / dark-contrast) amplitude must give the same finite,
+        positive SNR as a peak of equal depth, not a NaN from a negative
+        radicand. The peak amplitude read can return a signed value, and
+        peak_snr is documented as the recommended read on that path."""
+        model = NoiseModel(
+            read=0.0,
+            gain=0.01,
+            spectral_exponent=float("nan"),
+            white_floor=float("nan"),
+            signal_dependent=True,
+            correlated=None,
+        )
+        assert model.peak_snr(-100.0) == pytest.approx(model.peak_snr(100.0))
+        assert np.isfinite(model.peak_snr(-100.0))
 
 
 class TestNoiseModelDetection:
@@ -564,3 +644,191 @@ class TestNoiseModelDetection:
         result = fft_cnr(noisy)
         assert result.noise_model is None
         assert "var_signal_p" not in result.diagnostics
+
+
+class TestLowFreqBaseline:
+    """Low-frequency-baseline guard and region-of-interest windowing (issue #7).
+
+    A smooth baseline lives entirely below the spectral knee, so it is
+    reconstructed as signal and inflates the CNR even when no peak is present.
+    The ``lowfreq_dominated`` diagnostic flags that case, and ``roi`` restricts
+    the estimate to a window where the baseline is locally negligible.
+    """
+
+    N = 200
+
+    @staticmethod
+    def _peak(amp, center=100.0, sigma=10.0):
+        x = np.arange(TestLowFreqBaseline.N, dtype=float)
+        return amp * np.exp(-0.5 * ((x - center) / sigma) ** 2)
+
+    @staticmethod
+    def _baseline():
+        x = np.arange(TestLowFreqBaseline.N, dtype=float)
+        return 6.0 * np.cos(2 * np.pi * x / 140.0 + 0.6)
+
+    def test_flag_fires_on_peakless_baseline(self):
+        """A baseline with no peak must be flagged: CNR should be ~0 but the
+        estimator reports it high, so the guard is the only signal of trouble."""
+        rng = np.random.default_rng(0)
+        y = self._baseline() + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y)
+        assert result.diagnostics["lowfreq_dominated"] is True
+        assert result.diagnostics["lowfreq_offpeak_ratio"] > 2.5
+
+    def test_flag_silent_on_clean_peak(self):
+        """A localized peak on a flat baseline must not be flagged, including
+        at marginal CNR where the ratio is independent of peak height."""
+        rng = np.random.default_rng(1)
+        for amp in (20.0, 2.0):
+            y = self._peak(amp) + rng.normal(0, 1.0, self.N)
+            result = fft_cnr(y)
+            assert result.diagnostics["lowfreq_dominated"] is False
+
+    def test_ratio_nan_on_template_path(self):
+        """The off-peak statistic assumes a localized peak; on the matched
+        filter the template defines the signal, so the ratio is NaN and the
+        flag is never set."""
+        rng = np.random.default_rng(2)
+        clean = self._peak(20.0)
+        result = fft_cnr(clean + rng.normal(0, 1.0, self.N), template=clean)
+        assert np.isnan(result.diagnostics["lowfreq_offpeak_ratio"])
+        assert result.diagnostics["lowfreq_dominated"] is False
+
+    def test_explicit_roi_records_bounds_and_restricts(self):
+        rng = np.random.default_rng(3)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y, roi=(70, 130))
+        assert result.diagnostics["roi"] == (70, 130)
+        assert result.diagnostics["N"] == 60
+
+    def test_roi_clears_flag_on_localized_baseline(self):
+        """Windowing to the peak removes off-center baseline structure, so the
+        flag set on the full profile clears on the restricted estimate."""
+        rng = np.random.default_rng(4)
+        # Baseline bump well away from the peak at index 100.
+        x = np.arange(self.N, dtype=float)
+        bump = 8.0 * np.exp(-0.5 * ((x - 30) / 12.0) ** 2)
+        y = self._peak(20.0) + bump + rng.normal(0, 1.0, self.N)
+        full = fft_cnr(y)
+        windowed = fft_cnr(y, roi=(70, 130))
+        assert full.diagnostics["lowfreq_dominated"] is True
+        assert windowed.diagnostics["lowfreq_dominated"] is False
+
+    def test_auto_roi_does_not_false_flag_clean_peak(self):
+        """The off-peak exclusion scales to the feature width, so windowing a
+        clean peak with roi="auto" must not raise lowfreq_dominated: the tight
+        window leaves no off-peak region, and the flag stays False (the contract
+        that the guard does not false-fire on a clean peak, now under auto-roi)."""
+        x = np.arange(self.N, dtype=float)
+        for seed in range(8):
+            rng = np.random.default_rng(seed)
+            y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+            result = fft_cnr(y, roi="auto")
+            assert result.diagnostics["lowfreq_dominated"] is False
+
+    def test_auto_roi_tracks_dominant_peak(self):
+        rng = np.random.default_rng(5)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y, roi="auto")
+        start, stop = result.diagnostics["roi"]
+        assert start < 100 < stop  # window brackets the true peak center
+        assert result.cnr == pytest.approx(20.0, rel=0.2)
+
+    def test_auto_roi_tracks_dominant_dip(self):
+        """A downward (absorption / dark-contrast) feature must be located and
+        read end to end: the window brackets the dip, the CNR matches its depth,
+        and the amplitude carries the negative sign."""
+        rng = np.random.default_rng(8)
+        y = self._peak(-20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y, roi="auto")
+        start, stop = result.diagnostics["roi"]
+        assert start < 100 < stop  # window brackets the true dip center
+        assert result.cnr == pytest.approx(20.0, rel=0.2)
+        assert result.amplitude < 0
+
+    def test_roi_too_short_raises(self):
+        rng = np.random.default_rng(6)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="fewer than 16"):
+            fft_cnr(y, roi=(100, 110))
+
+    def test_invalid_roi_string_raises(self):
+        rng = np.random.default_rng(7)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="Unsupported roi"):
+            fft_cnr(y, roi="peak")
+
+    def test_reversed_roi_bounds_raise(self):
+        rng = np.random.default_rng(10)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="must be increasing"):
+            fft_cnr(y, roi=(130, 70))
+
+    def test_wrong_length_roi_raises(self):
+        rng = np.random.default_rng(11)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        with pytest.raises(ValueError, match="must be 'auto' or a"):
+            fft_cnr(y, roi=(70, 100, 130))
+
+    def test_auto_roi_misses_peak_when_offcenter_baseline_is_larger(self):
+        """Documented limitation: ``"auto"`` locates the largest feature, so an
+        off-center baseline that exceeds the peak of interest captures the
+        window. Explicit bounds are the remedy and recover the peak's CNR."""
+        rng = np.random.default_rng(12)
+        x = np.arange(self.N, dtype=float)
+        # Bump away from the peak at index 100, larger than the peak itself.
+        bump = 30.0 * np.exp(-0.5 * ((x - 30) / 12.0) ** 2)
+        y = self._peak(20.0) + bump + rng.normal(0, 1.0, self.N)
+        auto = fft_cnr(y, roi="auto")
+        a_start, a_stop = auto.diagnostics["roi"]
+        assert not (a_start < 100 < a_stop)  # auto misses the intended peak
+        explicit = fft_cnr(y, roi=(70, 130))
+        assert explicit.cnr == pytest.approx(20.0, rel=0.25)
+
+    def test_offpeak_ratio_pinned_values(self):
+        """Pin the off-peak ratio so a change to the off-peak window fraction or
+        the baseline subtraction cannot shift the dominance calibration
+        silently. Deterministic (fixed seed); a change here means the guard was
+        recalibrated and must be re-checked against scripts/validate_iscat_baseline.py."""
+        rng = np.random.default_rng(0)
+        baseline = self._baseline() + rng.normal(0, 1.0, self.N)
+        assert fft_cnr(baseline).diagnostics[
+            "lowfreq_offpeak_ratio"
+        ] == pytest.approx(3.6869, rel=1e-3)
+        rng = np.random.default_rng(1)
+        clean = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        assert fft_cnr(clean).diagnostics[
+            "lowfreq_offpeak_ratio"
+        ] == pytest.approx(0.3967, rel=1e-2)
+
+    def test_sign_ambiguous_false_on_clean_peak(self):
+        """A clean localized peak has no opposite-sign rival, so the
+        largest-magnitude read is unambiguous."""
+        rng = np.random.default_rng(1)
+        y = self._peak(20.0) + rng.normal(0, 1.0, self.N)
+        result = fft_cnr(y)
+        assert result.diagnostics["amplitude_sign_ambiguous"] is False
+
+    def test_sign_ambiguous_on_competing_opposite_feature(self):
+        """A localized opposite-sign excursion that rivals the chosen feature is
+        not low-frequency baseline structure, so lowfreq_dominated stays False.
+        The ambiguity flag is the only signal that the largest-magnitude read
+        has switched to the dip and flipped the amplitude sign."""
+        rng = np.random.default_rng(0)
+        x = np.arange(self.N, dtype=float)
+        peak = 5.0 * np.exp(-0.5 * ((x - 100.0) / 6.0) ** 2)
+        dip = -6.0 * np.exp(-0.5 * ((x - 130.0) / 6.0) ** 2)
+        y = peak + dip + rng.normal(0, 0.5, self.N)
+        result = fft_cnr(y)
+        assert result.amplitude < 0  # read switched to the deeper dip
+        assert result.diagnostics["amplitude_sign_ambiguous"] is True
+        assert result.diagnostics["lowfreq_dominated"] is False
+
+    def test_sign_ambiguous_false_on_template_path(self):
+        """The matched filter fixes the feature through the template, so the
+        sign-ambiguity flag does not apply and stays False."""
+        rng = np.random.default_rng(2)
+        clean = self._peak(20.0)
+        result = fft_cnr(clean + rng.normal(0, 1.0, self.N), template=clean)
+        assert result.diagnostics["amplitude_sign_ambiguous"] is False

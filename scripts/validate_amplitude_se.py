@@ -1,10 +1,11 @@
 """Monte Carlo calibration of the amplitude standard error across paths.
 
 The reported ``amplitude_se`` (and the derived ``amplitude_snr``) is computed
-differently on each amplitude path: the whitened matched filter returns its
-exact Cramer-Rao standard error, the generalized-Gaussian fit returns the
-amplitude error from its covariance, and the default peak path returns the
-proxy ``sigma / sqrt(kc_full)`` whose calibration was never characterized.
+differently on each amplitude path: the matched filter returns the exact
+closed-form standard error of its white-noise projection (noise-only weighting),
+the generalized-Gaussian fit returns the amplitude error from its covariance,
+and the default peak path returns the proxy ``sigma / sqrt(kc_full)`` whose
+calibration was never characterized.
 
 This sweep measures, for each path, the ratio of the predicted standard error
 to the empirical standard deviation of the amplitude estimate over many noise
@@ -23,52 +24,8 @@ import sys
 
 import numpy as np
 
+from _signals import METHODS, SHAPES
 from fft_cnr import fft_cnr
-
-
-# ---------------------------------------------------------------------------
-# Signal generators (shared with validate_accuracy.py)
-# ---------------------------------------------------------------------------
-
-def _generalized_gaussian(N, amplitude, sigma, noise_std, p, seed):
-    """Generalized Gaussian: p=2 is standard Gaussian, p<2 heavy-tailed, p>2 flat-topped."""
-    rng = np.random.default_rng(seed)
-    x = np.arange(N, dtype=float)
-    center = (N - 1) / 2.0
-    z = np.abs((x - center) / sigma)
-    clean = amplitude * np.exp(-0.5 * z ** p)
-    return clean + rng.normal(0, noise_std, N), clean
-
-
-def _gaussian_mixture(N, amplitude, sigma, noise_std, seed):
-    """Sum of a narrow and broad Gaussian; heavy-tailed, outside the GG family."""
-    rng = np.random.default_rng(seed)
-    x = np.arange(N, dtype=float)
-    center = (N - 1) / 2.0
-    narrow = 0.6 * amplitude * np.exp(-0.5 * ((x - center) / (sigma * 0.5)) ** 2)
-    broad = 0.4 * amplitude * np.exp(-0.5 * ((x - center) / (sigma * 2.0)) ** 2)
-    clean = narrow + broad
-    return clean + rng.normal(0, noise_std, N), clean
-
-
-def _lorentzian(N, amplitude, sigma, noise_std, seed):
-    """Lorentzian (Cauchy) peak, not in the generalized Gaussian family."""
-    rng = np.random.default_rng(seed)
-    x = np.arange(N, dtype=float)
-    center = (N - 1) / 2.0
-    clean = amplitude / (1.0 + ((x - center) / sigma) ** 2)
-    return clean + rng.normal(0, noise_std, N), clean
-
-
-SHAPES = {
-    "Gaussian": lambda N, A, s, ns, seed: _generalized_gaussian(N, A, s, ns, 2.0, seed),
-    "Heavy-tailed (p=1.5)": lambda N, A, s, ns, seed: _generalized_gaussian(N, A, s, ns, 1.5, seed),
-    "Flat-topped (p=4)": lambda N, A, s, ns, seed: _generalized_gaussian(N, A, s, ns, 4.0, seed),
-    "Gaussian mixture": _gaussian_mixture,
-    "Lorentzian": _lorentzian,
-}
-
-METHODS = ["peak", "generalized_gaussian", "matched_filter"]
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +187,7 @@ def main():
           f"{min(gg_ratios):.2f} -- {max(gg_ratios):.2f}")
     print(f"  Matched filter (Gaussian):           "
           f"{min(matched_ratios):.2f} -- {max(matched_ratios):.2f}  "
-          f"(overstates; PSD self-contamination, grows with CNR)")
+          f"(noise-only whitening)")
     print("=" * 72)
 
 

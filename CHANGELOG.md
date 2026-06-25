@@ -5,6 +5,62 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `roi` parameter to `fft_cnr`: restrict the estimate to a region of interest,
+  as explicit `(start, stop)` bounds or `"auto"` (a window sized to the largest
+  feature, peak or dip). Windowing removes off-center low-frequency baseline
+  structure that would otherwise be counted as signal (issue #7). The resolved
+  bounds are reported in `diagnostics["roi"]`.
+- Low-frequency baseline guard on the peak and generalized-Gaussian methods:
+  `diagnostics["lowfreq_dominated"]` (with `lowfreq_offpeak_ratio`) flags
+  profiles where smooth baseline structure away from the peak dominates, so the
+  reported `cnr` may reflect baseline power rather than the peak.
+- `diagnostics["amplitude_sign_ambiguous"]` on the peak and generalized-Gaussian
+  methods: true when an opposite-sign excursion at least half the chosen
+  feature's magnitude rivals it, so the largest-magnitude read could switch
+  features and flip the amplitude sign. It covers the localized competitor that
+  `lowfreq_dominated` does not, since a narrow rival is not low-frequency
+  baseline structure.
+- `scripts/validate_iscat_baseline.py`: Monte Carlo validation of the baseline
+  guard against an interferometric scattering microscopy (iSCAT) surrogate with
+  structured residual background. It documents that broadband structured
+  background is correlated noise, out of scope for the single-frame `cnr`, and
+  that the matched-filter path (read through `amplitude` / `amplitude_snr`) is
+  the recommended estimator in that regime.
+- `scripts/validate_amplitude_se.py` and `scripts/validate_cnr_ci_decomposition.py`:
+  Monte Carlo sweeps that calibrate the amplitude standard error per path and
+  trace it through to the CNR confidence interval.
+- Optional `assets` dependency group (matplotlib, curved-text) and
+  `assets/hero.py`, which renders the README hero image from a real `fft_cnr`
+  run.
+
+### Changed
+
+- Matched-filter standard error is now the exact closed-form error of the
+  white-noise projection (windowed data onto the windowed template, noise-only
+  weighting), replacing the `Pxx_full`-weighted form whose signal-contaminated
+  spectrum overstated the error and widened `cnr_ci95` on the template path.
+- `amplitude_snr` is now defined only on the matched-filter (template) path and
+  returns NaN on the peak and generalized-Gaussian paths, where the standard
+  error is a different quantity that is not comparable to it.
+- The peak amplitude read and `roi="auto"` now locate the largest-magnitude
+  feature, so a downward (absorption / dark-contrast) feature is found and
+  `amplitude` carries its sign. `cnr` is unchanged: it uses the amplitude
+  magnitude, and `NoiseModel.peak_snr` does the same.
+- A `template` that is constant after mean-subtraction now raises `ValueError`
+  rather than returning a silent all-NaN result: the matched-filter projection
+  is undefined when the template has no variation.
+
+### Documentation
+
+- README section "Low-frequency baseline and structured background" describing
+  the guard, `roi`, the iSCAT scope limit, and the matched-filter recommendation.
+- README "References", "Contributing and community", and "Development disclosure"
+  sections, and a Tests CI badge.
+
 ## [0.2.1] - 2026-06-14
 
 ### Added
@@ -54,6 +110,7 @@ This release carries the citation metadata into the published artifact. Version
 - Initial release: FFT-based CNR estimation from single 1-D profiles, with an
   AIC-selected signal/noise frequency boundary and a 95% confidence interval.
 
+[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/thiebes/fft-cnr/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/thiebes/fft-cnr/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/thiebes/fft-cnr/compare/v0.1.0...v0.1.1

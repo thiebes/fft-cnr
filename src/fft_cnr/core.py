@@ -58,8 +58,13 @@ class NoiseModel:
     correlated: bool | None
 
     def peak_snr(self, amplitude: float) -> float:
-        """Peak signal-to-noise ratio under the fitted real-space noise model."""
-        return float(amplitude / np.sqrt(self.gain * amplitude + self.read**2))
+        """Peak signal-to-noise ratio under the fitted real-space noise model.
+
+        Uses the amplitude magnitude, so a negative (absorption / dark-contrast)
+        amplitude gives the same positive SNR as a peak of equal depth.
+        """
+        a = abs(amplitude)
+        return float(a / np.sqrt(self.gain * a + self.read**2))
 
 
 @dataclass
@@ -73,9 +78,16 @@ class CNREstimate:
     cnr_ci95 : tuple[float, float]
         95% confidence interval on CNR (delta-method approximation).
     amplitude : float
-        Estimated signal amplitude.
+        Estimated signal amplitude. Signed on the peak and generalized-Gaussian
+        paths: negative for a downward (absorption / dark-contrast) feature.
+        ``cnr`` uses its magnitude.
     amplitude_se : float
-        Standard error of the amplitude estimate (NaN if unavailable).
+        Standard error of the amplitude estimate (NaN if unavailable). On the
+        matched-filter and generalized-Gaussian paths this is a derived
+        standard error; on the default peak path it is an uncharacterized
+        proxy (``sigma / sqrt(kc_full)``) that understates the true scatter,
+        so it feeds ``cnr_ci95`` (where the noise term dominates) but is not
+        exposed through ``amplitude_snr``.
     noise_rms : float
         RMS noise estimated from high-frequency spectral region.
     noise_ci95 : tuple[float, float]
@@ -100,24 +112,20 @@ class CNREstimate:
 
     @property
     def amplitude_snr(self) -> float:
-        """Amplitude signal-to-noise ratio: amplitude over its standard error.
+        """Matched-filter signal-to-noise ratio: amplitude over its standard error.
 
-        Reports the detectability of the amplitude for whichever estimator
-        ran, which depends on the amplitude path:
-
-        - with a ``template``, this is exactly the matched-filter SNR -- the
-          efficient, full-covariance member of the contrast-to-noise-ratio
-          family;
-        - with the generalized-Gaussian fit, it is the fit's amplitude SNR
-          from the fit covariance;
-        - with the peak method, it is the amplitude over the proxy standard
-          error ``sigma / sqrt(kc_full)``, whose calibration is not
-          characterized.
-
-        It is NaN when ``amplitude_se`` is not finite. No standard error is
-        fabricated for a path that lacks one.
+        Defined only on the matched-filter (``template``) path, where the
+        standard error is the whitened estimator's, so the ratio is the
+        efficient detectability member of the contrast-to-noise-ratio family.
+        It is NaN on every other path: the peak proxy standard error is
+        uncharacterized, and the generalized-Gaussian standard error is
+        denominated in the fit residual rather than the noise spectrum, so
+        neither is the same statistical object and the values are not
+        comparable. Those paths still expose ``amplitude_se`` directly for any
+        caller that wants the raw ratio.
         """
-        if np.isfinite(self.amplitude_se):
+        is_matched = self.diagnostics.get("amplitude_method") == "matched_filter"
+        if is_matched and np.isfinite(self.amplitude_se):
             return float(self.amplitude / self.amplitude_se)
         return float("nan")
 
@@ -389,16 +397,13 @@ def _estimate_noise_model(
         ``var_signal_p`` (rank p-value of the gain against the null) or
         ``noise_model_skipped`` (reason the fit was not attempted).
     """
-    n_null = 199
-    test_level = 0.05
-    min_range_in_sigmas = 3.0
     if rng is None:
         rng = np.random.default_rng(0)
 
     signal_estimate = decomp.x_lp + decomp.x_mean
     residual = decomp.x - decomp.x_lp
 
-    if float(np.ptp(signal_estimate)) < min_range_in_sigmas * decomp.sigma:
+    if float(np.ptp(signal_estimate)) < _NOISE_MODEL_MIN_RANGE_SIGMAS * decomp.sigma:
         model = NoiseModel(
             read=float("nan"),
             gain=float("nan"),
@@ -418,8 +423,8 @@ def _estimate_noise_model(
     )
 
     N = decomp.x.size
-    null_gains = np.empty(n_null)
-    for i in range(n_null):
+    null_gains = np.empty(_NOISE_MODEL_NULL_DRAWS)
+    for i in range(_NOISE_MODEL_NULL_DRAWS):
         y = signal_estimate + rng.normal(0.0, decomp.sigma, N)
         d = _spectral_decomposition(
             y,
@@ -434,13 +439,13 @@ def _estimate_noise_model(
             d.x_lp + d.x_mean, d.x - d.x_lp, d.frac_kept
         )
 
-    p_value = float((1 + np.sum(null_gains >= gain)) / (n_null + 1))
+    p_value = float((1 + np.sum(null_gains >= gain)) / (_NOISE_MODEL_NULL_DRAWS + 1))
     model = NoiseModel(
         read=float(np.sqrt(max(0.0, read2))),
         gain=gain,
         spectral_exponent=float("nan"),
         white_floor=float("nan"),
-        signal_dependent=bool(p_value <= test_level),
+        signal_dependent=bool(p_value <= _NOISE_MODEL_TEST_LEVEL),
         correlated=None,
     )
     return model, {"var_signal_p": p_value}
@@ -503,6 +508,171 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
         return np.nan, np.nan, {}
 
 
+_LOWFREQ_OFFPEAK_HALFWIDTH_FRAC = 0.25
+_LOWFREQ_DOMINANCE_THRESHOLD = 2.5
+
+# Peak-path sign ambiguity: the largest-magnitude read picks one feature, but a
+# competing excursion of the opposite sign at least this fraction of the chosen
+# magnitude could flip the amplitude (and its sign) under noise/baseline jitter.
+# A localized rival is not low-frequency baseline structure, so it would not trip
+# the lowfreq guard; this flag surfaces the switch the off-peak ratio cannot.
+_AMPLITUDE_SIGN_AMBIGUOUS_FRAC = 0.5
+
+# Auto-roi window sizing: half-width is the feature's half-prominence width
+# scaled by this factor (1.1 FWHM is about +/- 2.5 sigma), floored so a very
+# narrow feature still yields a usable window, and the total span is never
+# allowed below the minimum profile length the estimator accepts.
+_ROI_HALFWIDTH_FWHM_FACTOR = 1.1
+_ROI_HALFWIDTH_FLOOR = 8
+_MIN_ROI_SPAN = 16
+
+# Noise-model detector (_estimate_noise_model): number of parametric-bootstrap
+# null realizations, the significance level for the gain rank test, and the
+# minimum signal range (in noise-RMS units) below which the photon-transfer
+# fit is skipped as unconstrained.
+_NOISE_MODEL_NULL_DRAWS = 199
+_NOISE_MODEL_TEST_LEVEL = 0.05
+_NOISE_MODEL_MIN_RANGE_SIGMAS = 3.0
+
+
+def _feature_peak_and_width(x_lp: np.ndarray) -> tuple[int, int]:
+    """Locate the largest-magnitude feature and measure its half-prominence width.
+
+    Both are measured on the signed deviation from the median, so a downward
+    (absorption / dark-contrast) feature is handled the same way as an upward
+    one. Returns ``(peak_idx, width)`` with ``width >= 2``; ``width`` is the
+    full width at half prominence in samples. Shared by the auto-roi window
+    sizing and the off-peak ratio so the two locate the feature identically.
+    """
+    n = x_lp.size
+    dev = x_lp - float(np.median(x_lp))
+    peak_idx = int(np.argmax(np.abs(dev)))
+    peak_dev = float(dev[peak_idx])
+    if peak_dev == 0.0:
+        return peak_idx, 2
+    left = peak_idx
+    while left > 0 and dev[left] / peak_dev > 0.5:
+        left -= 1
+    right = peak_idx
+    while right < n - 1 and dev[right] / peak_dev > 0.5:
+        right += 1
+    return peak_idx, max(2, right - left)
+
+
+def _lowfreq_offpeak_ratio(x_lp: np.ndarray, sigma: float) -> float:
+    """Off-peak low-frequency structure relative to the noise RMS.
+
+    A localized peak sits on a flat baseline, so the low-pass reconstruction
+    is flat away from the peak; a smooth baseline (or fringe) carries
+    low-frequency structure across the whole profile. This statistic is the
+    RMS of ``x_lp`` outside a window around its largest excursion, in units of
+    ``sigma``. It is near zero for a clean peak (the off-peak region is just
+    the in-band tail of the white noise) and large when a baseline dominates,
+    independent of the peak amplitude, so it flags the peakless-baseline case
+    without false-flagging a genuinely small peak. It cannot separate a peak
+    whose width approaches the profile length from a baseline -- the two are
+    indistinguishable in a single frame (see ``NoiseModel``).
+
+    The excluded zone is scaled to the feature's own width (with a fixed
+    fraction of the profile as a floor), so the peak's shoulders do not leak
+    into the off-peak region. This keeps the statistic honest whether ``x_lp``
+    is the full profile or a window already cropped to the feature by ``roi``:
+    on a tight window the exclusion covers the whole feature and the off-peak
+    region vanishes, returning NaN ("not applicable") rather than a false flag.
+
+    Returns NaN when the off-peak region is too small to estimate or the noise
+    RMS is zero.
+    """
+    N = x_lp.size
+    if sigma <= 0:
+        return float("nan")
+    peak_idx, fwhm = _feature_peak_and_width(x_lp)
+    half_width = max(
+        int(_LOWFREQ_OFFPEAK_HALFWIDTH_FRAC * N),
+        int(round(_ROI_HALFWIDTH_FWHM_FACTOR * fwhm)),
+    )
+    off_peak = np.abs(np.arange(N) - peak_idx) > half_width
+    if int(np.sum(off_peak)) < 4:
+        return float("nan")
+    off = x_lp[off_peak]
+    baseline = float(np.median(off))
+    return float(np.sqrt(np.mean((off - baseline) ** 2)) / sigma)
+
+
+def _resolve_roi(
+    x: np.ndarray,
+    roi: str | tuple[int, int],
+    *,
+    window: str,
+    tukey_alpha: float,
+    welch_nperseg: int | None,
+    welch_noverlap: int | None,
+    cutoff_guard: tuple[float, float],
+    fallback_cut_frac: float,
+) -> tuple[int, int]:
+    """Resolve a region-of-interest specification to integer ``(start, stop)``.
+
+    ``"auto"`` runs a pre-pass spectral decomposition, locates the peak of the
+    low-pass reconstruction, and takes a window scaled to the peak's own width
+    (its full width at half prominence): roughly +/- 2.5 sigma, clamped to the
+    profile bounds. Sizing the window to the peak is what lets it exclude
+    off-center structure; a fixed fraction of the profile would either keep too
+    much baseline or clip a broad peak. A two-element sequence is taken as
+    explicit ``(start, stop)`` bounds. The window restricts every downstream
+    step -- knee detection, noise RMS, and amplitude -- and is the remedy for
+    off-center baseline structure that would otherwise leak into the CNR. It
+    cannot help against a baseline whose structure spans the peak itself; the
+    ``lowfreq_dominated`` diagnostic flags that residual case.
+    """
+    N = x.size
+    if isinstance(roi, str):
+        if roi != "auto":
+            raise ValueError(
+                f"Unsupported roi={roi!r}. Use 'auto' or a (start, stop) pair."
+            )
+        pre = _spectral_decomposition(
+            x,
+            window=window,
+            tukey_alpha=tukey_alpha,
+            welch_nperseg=welch_nperseg,
+            welch_noverlap=welch_noverlap,
+            cutoff_guard=cutoff_guard,
+            fallback_cut_frac=fallback_cut_frac,
+        )
+        peak_idx, fwhm = _feature_peak_and_width(pre.x_lp)
+        # FWHM is ~2.355 sigma; ~2.5 sigma each side (about 1.1 FWHM) keeps the
+        # peak and its shoulders while dropping off-center structure. Enforce a
+        # usable span and slide it inside the profile so a peak near an edge
+        # (common when there is no real peak to find) still yields a window.
+        half_width = max(
+            _ROI_HALFWIDTH_FLOOR, int(round(_ROI_HALFWIDTH_FWHM_FACTOR * fwhm))
+        )
+        span = min(N, max(_MIN_ROI_SPAN, 2 * half_width + 1))
+        start = max(0, min(peak_idx - span // 2, N - span))
+        stop = start + span
+    else:
+        bounds = tuple(int(v) for v in roi)
+        if len(bounds) != 2:
+            raise ValueError(
+                f"Region of interest must be 'auto' or a (start, stop) pair; "
+                f"got {len(bounds)} values."
+            )
+        start, stop = bounds
+        if stop <= start:
+            raise ValueError(
+                f"Region of interest bounds must be increasing; got "
+                f"(start={start}, stop={stop})."
+            )
+        start = max(0, start)
+        stop = min(N, stop)
+        if stop - start < _MIN_ROI_SPAN:
+            raise ValueError(
+                f"Region of interest spans fewer than {_MIN_ROI_SPAN} points; "
+                f"widen the window or pass the full profile."
+            )
+    return start, stop
+
+
 def fft_cnr(
     x: np.ndarray,
     template: np.ndarray | None = None,
@@ -514,6 +684,7 @@ def fft_cnr(
     welch_noverlap: int | None = None,
     cutoff_guard: tuple[float, float] = (0.05, 0.5),
     fallback_cut_frac: float = 0.25,
+    roi: str | tuple[int, int] | None = None,
     return_bandpassed_noise: bool = False,
     estimate_noise_model: bool = False,
     rng: np.random.Generator | None = None,
@@ -521,8 +692,8 @@ def fft_cnr(
     """Estimate contrast-to-noise ratio from a single 1-D profile using FFT methods.
 
     Uses unitary FFT normalization, Welch PSD estimation with degrees-of-freedom
-    tracking, AIC-based objective cutoff selection, whitened matched-filter amplitude
-    estimation, and analytical confidence intervals.
+    tracking, AIC-based objective cutoff selection, white-noise matched-filter
+    amplitude estimation, and analytical confidence intervals.
 
     Parameters
     ----------
@@ -558,6 +729,16 @@ def fft_cnr(
         Fractional bounds for the AIC knee search range.
     fallback_cut_frac : float
         Fallback cutoff fraction if AIC selection fails.
+    roi : str, tuple[int, int], or None
+        Restrict the estimate to a region of interest. ``None`` (default)
+        uses the full profile. A ``(start, stop)`` index pair estimates on
+        that slice. ``"auto"`` locates the largest feature (peak or dip) and
+        takes a window scaled to its own width (about +/- 2.5 sigma). Windowing
+        removes off-center low-frequency baseline structure that would otherwise
+        be counted as signal; the chosen bounds are reported in
+        ``diagnostics["roi"]``. ``"auto"`` locates the largest feature, so when
+        an off-center baseline exceeds the peak of interest, pass explicit
+        bounds instead. The window must span at least 16 points.
     return_bandpassed_noise : bool
         If True, include the bandpassed noise array in diagnostics.
     estimate_noise_model : bool
@@ -577,12 +758,29 @@ def fft_cnr(
     -------
     CNREstimate
         Dataclass containing CNR, amplitude, noise, confidence intervals,
-        and diagnostic information.
+        and diagnostic information. On the localized-peak methods (``peak`` and
+        ``generalized_gaussian``) the diagnostics carry
+        ``lowfreq_offpeak_ratio`` -- the RMS of low-frequency structure away
+        from the peak, in units of the noise RMS -- and the boolean
+        ``lowfreq_dominated`` (true above an off-peak ratio of 2.5). A true
+        flag means smooth baseline or fringe structure dominates the profile,
+        so the reported CNR may reflect baseline power rather than the peak;
+        narrow the estimate with ``roi``. The ratio is NaN on the
+        matched-filter (``template``) path, where the template defines the
+        signal and the off-peak statistic does not apply.
+
+        The localized-peak methods also carry ``amplitude_sign_ambiguous``:
+        true when an opposite-sign excursion at least half the chosen feature's
+        magnitude rivals it, so the largest-magnitude read could switch features
+        (and flip the amplitude sign) under noise. It is False on the
+        matched-filter path, where the template fixes the feature.
 
     Raises
     ------
     ValueError
-        If the input profile has fewer than 16 points.
+        If the input profile has fewer than 16 points, a region of interest
+        spans fewer than 16 points, or a supplied ``template`` is constant
+        after mean-subtraction (the matched filter is then undefined).
     """
     x = np.asarray(x, float).ravel()
     N = x.size
@@ -594,6 +792,37 @@ def fft_cnr(
             f"Unsupported fit_model={fit_model!r}. "
             f"Supported values: {sorted(_valid_fit_models)}."
         )
+
+    roi_bounds: tuple[int, int] | None = None
+    if roi is not None:
+        roi_bounds = _resolve_roi(
+            x,
+            roi,
+            window=window,
+            tukey_alpha=tukey_alpha,
+            welch_nperseg=welch_nperseg,
+            welch_noverlap=welch_noverlap,
+            cutoff_guard=cutoff_guard,
+            fallback_cut_frac=fallback_cut_frac,
+        )
+        # Slice a full-length template to the same window as the data so the two
+        # stay aligned; without this a full-profile template would be truncated
+        # from its start and the matched filter would project onto the wrong
+        # samples. A template already sized to the ROI is left untouched. Any
+        # other length cannot be aligned to the window, so reject it rather than
+        # silently project onto mismatched samples.
+        if template is not None:
+            t_full = np.asarray(template, float).ravel()
+            span = roi_bounds[1] - roi_bounds[0]
+            if t_full.size == N:
+                template = t_full[roi_bounds[0] : roi_bounds[1]]
+            elif t_full.size != span:
+                raise ValueError(
+                    f"With roi, template length must match either the full "
+                    f"profile ({N}) or the roi span ({span}); got {t_full.size}."
+                )
+        x = x[roi_bounds[0] : roi_bounds[1]]
+        N = x.size
 
     d = _spectral_decomposition(
         x,
@@ -607,8 +836,6 @@ def fft_cnr(
     x = d.x
     x_mean = d.x_mean
     w = d.w
-    X = d.X
-    Pxx_full = d.Pxx_full
     kc_full = d.kc_full
     sigma = d.sigma
     sigma_ci = d.sigma_ci
@@ -636,15 +863,26 @@ def fft_cnr(
             else:
                 t = np.pad(t, (0, N - t.size))
         t = t - np.mean(t)
-        Tw = t * w
-        T = np.fft.rfft(Tw, norm="ortho")
-        Sn = np.maximum(Pxx_full, np.finfo(float).tiny)
-        num = np.sum(X * np.conj(T) / Sn)
-        den = np.sum(np.abs(T) ** 2 / Sn)
-        Ahat = np.real(num / den)
-        Avar = 1.0 / den
-        Amp = Ahat
-        Amp_se = np.sqrt(Avar)
+        # White-noise matched filter: project the windowed, demeaned data onto
+        # the windowed template.  The earlier version whitened by the full data
+        # power spectrum, but that spectrum is signal-contaminated in the signal
+        # band, which inflated the standard error (and hence cnr_ci95) on this
+        # path.  For the broadband-white noise the package targets, the optimal
+        # weighting is flat, so the unweighted projection is the efficient
+        # estimator and its standard error follows in closed form.
+        tw = t * w
+        xw = x * w
+        denom = float(np.sum(tw * tw))
+        if denom == 0.0:
+            raise ValueError(
+                "template has no variation after mean-subtraction "
+                "(constant template); the matched filter is undefined."
+            )
+        Amp = float(np.sum(xw * tw) / denom)
+        # Exact standard error of the projection under white noise of level
+        # sigma: var(Amp) = sigma**2 * sum(w**2 * tw**2) / denom**2, which
+        # reduces to the textbook sigma / ||t|| when the window is flat.
+        Amp_se = float(sigma * np.sqrt(np.sum((w * tw) ** 2)) / denom)
         amp_method = "matched_filter"
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
@@ -657,13 +895,26 @@ def fft_cnr(
         # Default: non-parametric peak read from the low-pass reconstruction.
         amp_method = "peak"
 
+    amplitude_sign_ambiguous = False
     if amp_method in ("peak", "generalized_gaussian_fit_fallback"):
-        peak_val = float(np.max(x_lp)) + x_mean
         margin = max(1, N // 4)
         x_raw = x + x_mean
         baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
-        Amp = peak_val - baseline
+        # Read the largest-magnitude excursion from the baseline so a negative
+        # (absorption / dark-contrast) feature is measured with the right sign;
+        # for a positive peak this is the peak height, unchanged.
+        dev = (x_lp + x_mean) - baseline
+        Amp = float(dev[int(np.argmax(np.abs(dev)))])
         Amp_se = float(sigma / np.sqrt(max(1, kc_full)))
+        # Flag when an opposite-sign excursion rivals the chosen feature: the
+        # largest-magnitude read could then switch features (and flip the sign)
+        # under noise, and a localized rival does not trip lowfreq_dominated.
+        opposite = dev * np.sign(Amp) < 0
+        if np.any(opposite):
+            rival = float(np.max(np.abs(dev[opposite])))
+            amplitude_sign_ambiguous = bool(
+                rival > _AMPLITUDE_SIGN_AMBIGUOUS_FRAC * abs(Amp)
+            )
 
     # CNR and confidence interval (delta-method)
     cnr_val = np.inf if sigma == 0 else float(np.abs(Amp) / sigma)
@@ -677,6 +928,19 @@ def fft_cnr(
     else:
         cnr_ci = (np.nan, np.nan)
 
+    # The flat-baseline assumption only applies to the localized-peak methods;
+    # the matched filter defines its signal through the template and rejects
+    # non-matching structure by projection, so the off-peak statistic (which
+    # would read an extended template's own lobes as baseline) does not apply.
+    if template is None:
+        offpeak_ratio = _lowfreq_offpeak_ratio(x_lp, sigma)
+    else:
+        offpeak_ratio = float("nan")
+    lowfreq_dominated = bool(
+        np.isfinite(offpeak_ratio)
+        and offpeak_ratio > _LOWFREQ_DOMINANCE_THRESHOLD
+    )
+
     diags: dict = {
         "N": N,
         "window_rms": d.w_rms,
@@ -685,7 +949,12 @@ def fft_cnr(
         "welch_noverlap": d.welch_noverlap,
         "kept_bins": d.kept,
         "amplitude_method": amp_method,
+        "lowfreq_offpeak_ratio": offpeak_ratio,
+        "lowfreq_dominated": lowfreq_dominated,
+        "amplitude_sign_ambiguous": amplitude_sign_ambiguous,
     }
+    if roi_bounds is not None:
+        diags["roi"] = roi_bounds
     if gfit_params:
         diags["gaussian_fit_params"] = gfit_params
     if return_bandpassed_noise:

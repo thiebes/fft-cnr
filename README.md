@@ -2,10 +2,13 @@
 
 [![PyPI](https://img.shields.io/pypi/v/fft-cnr.svg)](https://pypi.org/project/fft-cnr/)
 [![Python versions](https://img.shields.io/pypi/pyversions/fft-cnr.svg)](https://pypi.org/project/fft-cnr/)
+[![Tests](https://github.com/thiebes/fft-cnr/actions/workflows/test.yml/badge.svg)](https://github.com/thiebes/fft-cnr/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20691435.svg)](https://doi.org/10.5281/zenodo.20691435)
 
 FFT-based contrast-to-noise ratio estimation from a single frame.
+
+![Two panels illustrating fft-cnr: a noisy 1-D intensity profile with its recovered signal, amplitude, noise band, and CNR with a 95% confidence interval (left); and the profile's power spectrum split at the AIC-detected signal/noise knee (right).](https://raw.githubusercontent.com/thiebes/fft-cnr/main/assets/hero.png)
 
 Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
 single acquisition. You do not need repeat frames or a separate background
@@ -123,22 +126,22 @@ is underestimated.
 Two alternatives are available:
 
 - **Matched filter** (`template` parameter): when a noise-free template of the
-  expected signal shape is available, a matched filter weighted by the noise
-  spectrum gives the most precise amplitude estimate and standard error. This
-  holds only when the template matches the true shape; a mismatched template
-  biases the amplitude.
+  expected signal shape is available, a matched filter gives the most precise
+  amplitude estimate and a calibrated standard error. This holds only when the
+  template matches the true shape; a mismatched template biases the amplitude.
 
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
   to flat-topped. Useful when fitted parameters (center, width, shape) are
   needed in addition to CNR.
 
-The `result.amplitude_snr` property reports the amplitude divided by its
-standard error for whichever estimator ran. A larger value means the amplitude
-stands out more clearly above the noise. With a template it is exactly the
-matched-filter SNR; with the generalized-Gaussian fit it is the fit's amplitude
-SNR; with the peak method it uses a proxy standard error whose calibration is
-not characterized. It is NaN when no standard error is available.
+The `result.amplitude_snr` property reports the matched-filter signal-to-noise
+ratio (amplitude over its standard error). A larger value means the amplitude
+stands out more clearly above the noise. It is defined only on the matched-filter
+(template) path, where the standard error is calibrated; on the peak and
+generalized-Gaussian paths it is NaN, because those standard errors are
+different quantities that are not comparable to it. Those paths still expose
+`amplitude_se` directly for callers that want the raw ratio.
 
 ```python
 # With a known template
@@ -212,6 +215,41 @@ Separating them needs a second, independent view in which the signal repeats but
 the noise does not: multiple frames, an interleaved scan, or a reference
 channel. Those are also the way to correct correlated noise once it is detected.
 
+## Low-frequency baseline and structured background
+
+A smooth baseline, a slow trend or a single low-frequency fringe, sits entirely
+below the signal/noise boundary, so `fft_cnr` reads it as signal. With a strong
+baseline the peak-method `cnr` can stay high even for a profile with no peak.
+Two tools address this:
+
+- `diagnostics["lowfreq_dominated"]` (with the underlying
+  `lowfreq_offpeak_ratio`) is true when low-frequency structure away from the
+  peak exceeds 2.5 times the noise RMS. It marks profiles where the reported
+  `cnr` may reflect baseline power rather than the peak. The flag is set on the
+  peak and generalized-Gaussian methods and is not set on the matched-filter
+  path, where the template defines the signal.
+- `roi` restricts the estimate to a window around the peak, removing off-center
+  baseline structure. Pass explicit `(start, stop)` bounds, or `"auto"` to size
+  a window to the peak. `"auto"` locates the largest feature, so pass explicit
+  bounds when an off-center baseline is larger than the peak of interest.
+
+This guard is calibrated for smooth, low-order baselines. Broadband structured
+background is a different problem. The residual speckle and fringe field left
+after interferometric scattering microscopy (iSCAT) background subtraction is
+the representative case: its power spans many spatial frequencies, including the
+high-frequency band that sets the noise estimate. It both inflates the noise
+RMS, which suppresses real peaks, and adds low-frequency amplitude, which raises
+peakless frames, so the peak-method `cnr` is unreliable and `lowfreq_dominated`
+does not detect it. This is correlated noise (see above) and cannot be
+characterized from a single frame.
+
+For this regime, use the matched filter: pass the known signal shape as
+`template` and read `amplitude` and `amplitude_snr` rather than `cnr`. The
+projection onto the template rejects background that does not match the template
+shape, so the amplitude and its SNR stay accurate where `cnr` does not. For
+iSCAT the template is the interferometric point-spread function. The
+`scripts/validate_iscat_baseline.py` simulation documents this behavior.
+
 ## Return value
 
 `fft_cnr` returns a `CNREstimate` dataclass. The first five fields are the
@@ -222,13 +260,13 @@ advanced inspection.
 | -------------- | ---------------------- | --------------------------------------------------- |
 | `cnr` | `float` | Estimated contrast-to-noise ratio |
 | `cnr_ci95` | `tuple[float, float]` | 95% confidence interval on CNR |
-| `amplitude` | `float` | Signal amplitude estimate |
+| `amplitude` | `float` | Signal amplitude estimate (signed on the peak path: negative for a dip) |
 | `amplitude_se` | `float` | Standard error of the amplitude estimate |
-| `amplitude_snr` | `float` (property) | Amplitude over its standard error; equals the matched-filter SNR with a template; NaN when no standard error is available |
+| `amplitude_snr` | `float` (property) | Matched-filter SNR (amplitude over its standard error); NaN on the peak and generalized-Gaussian paths |
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
-| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params |
+| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), and `roi` bounds when set |
 | `noise_model` | `NoiseModel \| None` | Fitted noise structure (`None` unless requested) |
 
 ## Parameters
@@ -248,6 +286,7 @@ rarely need adjustment.
 | `welch_noverlap` | `None` | Welch overlap (defaults to `nperseg // 2`) |
 | `cutoff_guard` | `(0.05, 0.5)` | Fractional frequency bounds for signal/noise boundary search |
 | `fallback_cut_frac` | `0.25` | Fallback signal/noise boundary if AIC selection fails |
+| `roi` | `None` | Restrict to a region of interest: `(start, stop)` bounds or `"auto"` (see Low-frequency baseline and structured background) |
 | `return_bandpassed_noise` | `False` | Include the bandpassed noise array in diagnostics |
 | `estimate_noise_model` | `False` | Fit and test the noise model (see Noise model detection) |
 | `rng` | `None` | Generator for the noise-model test; `None` is deterministic |
@@ -305,10 +344,23 @@ method, CNR=5). Providing a matched template reduces scatter at low CNR.
 ### Confidence intervals
 
 The 95% confidence intervals contain the true value in 99 to 100% of trials
-across all tested conditions. The intervals are conservative, that is, wider
-than a true 95% interval, because the degrees of freedom used for the noise
-interval are set conservatively, so the chi-squared interval comes out wider
-than nominal. The intervals are therefore reliable but not tight.
+across all tested conditions, so they are reliable but wider than a true 95%
+interval. The interval combines two terms, the uncertainty in the amplitude and
+the uncertainty in the noise level, and which term makes it wide depends on the
+amplitude method.
+
+For the peak and generalized-Gaussian methods the noise term dominates. The
+degrees of freedom used for the chi-squared noise interval are set
+conservatively, so that term, and the combined interval, come out wider than
+nominal.
+
+For the matched-filter method (a supplied template) the amplitude standard error
+is the exact closed-form error of the white-noise projection: the windowed data
+projected onto the windowed template, with error sigma divided by the template
+norm for a flat window. The noise term still dominates the combined interval at
+the conservative degrees of freedom above, so the matched-filter interval comes
+out comparable in width to the others while resting on the most precise amplitude
+estimate.
 
 ### Noise model detection
 
@@ -357,20 +409,13 @@ repository" button generates APA and BibTeX from it.
 ## Background
 
 The spectral decomposition approach used here originated in a study of noise
-effects on diffusion coefficient estimation in chemical transport imaging:
-
-> J. J. Thiebes, E. M. Grumstrup, J. Chem. Phys. **160**, 124201 (2024).
-> [doi:10.1063/5.0190347](https://doi.org/10.1063/5.0190347)
-
-This package has evolved from the method described in that paper. The
-power-spectrum estimation, knee detection, and confidence-interval machinery all
-differ from the original.
+effects on diffusion coefficient estimation in chemical transport imaging
+(Thiebes & Grumstrup, 2024). This package has evolved from the method described
+in that paper. The power-spectrum estimation, knee detection, and
+confidence-interval machinery all differ from the original.
 
 Support for non-Gaussian profiles was motivated by work on excess kurtosis
-in exciton transport:
-
-> E. Arévalo Rodríguez, M. Meléndez, J. Cuadra, F. Prins, J. Phys. Chem. Lett.
-> **17**, 2479--2484 (2026). [doi:10.1021/acs.jpclett.5c03961](https://doi.org/10.1021/acs.jpclett.5c03961)
+in exciton transport (Arévalo Rodríguez et al., 2026).
 
 **Methods and background.** The package implements established signal-processing
 and sensor-characterization methods: averaged-periodogram power-spectrum
@@ -382,13 +427,72 @@ the photon-transfer characterization of sensor noise (Janesick, 2007; EMVA
 Standard 1288). Estimating a Poisson-Gaussian noise model from a single image is
 established separately (Foi et al., 2008); this package folds a photon-transfer
 fit into the spectral decomposition it already computes rather than
-reimplementing that method. Full references with DOIs are in
+reimplementing that method. Full references with DOIs are listed under
+[References](#references) below; machine-readable citation metadata is in
 [CITATION.cff](CITATION.cff).
+
+## References
+
+- Akaike, H. (1974). A new look at the statistical model identification.
+  *IEEE Transactions on Automatic Control*, 19(6), 716-723.
+  [doi:10.1109/TAC.1974.1100705](https://doi.org/10.1109/TAC.1974.1100705)
+- Arévalo Rodríguez, E., Meléndez, M., Cuadra, J., & Prins, F. (2026).
+  *Journal of Physical Chemistry Letters*, 17, 2479-2484.
+  [doi:10.1021/acs.jpclett.5c03961](https://doi.org/10.1021/acs.jpclett.5c03961)
+- European Machine Vision Association (2021). *EMVA Standard 1288: Standard for
+  Characterization of Image Sensors and Cameras*, version 4.0.
+  [emva.org](https://www.emva.org)
+- Foi, A., Trimeche, M., Katkovnik, V., & Egiazarian, K. (2008). Practical
+  Poissonian-Gaussian noise modeling and fitting for single-image raw-data.
+  *IEEE Transactions on Image Processing*, 17(10), 1737-1754.
+  [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
+- Harris, F. J. (1978). On the use of windows for harmonic analysis with the
+  discrete Fourier transform. *Proceedings of the IEEE*, 66(1), 51-83.
+  [doi:10.1109/PROC.1978.10837](https://doi.org/10.1109/PROC.1978.10837)
+- Janesick, J. R. (2007). *Photon Transfer*. SPIE Press.
+  [doi:10.1117/3.725073](https://doi.org/10.1117/3.725073)
+- Kay, S. M. (1993). *Fundamentals of Statistical Signal Processing, Volume I:
+  Estimation Theory*. Prentice Hall. ISBN 978-0-13-345711-7.
+- North, D. O. (1963). An analysis of the factors which determine signal/noise
+  discrimination in pulsed-carrier systems. *Proceedings of the IEEE*, 51(7),
+  1016-1027. [doi:10.1109/PROC.1963.2383](https://doi.org/10.1109/PROC.1963.2383)
+- Thiebes, J. J., & Grumstrup, E. M. (2024). *Journal of Chemical Physics*,
+  160, 124201. [doi:10.1063/5.0190347](https://doi.org/10.1063/5.0190347)
+- Turin, G. L. (1960). An introduction to matched filters. *IRE Transactions on
+  Information Theory*, 6(3), 311-329.
+  [doi:10.1109/TIT.1960.1057571](https://doi.org/10.1109/TIT.1960.1057571)
+- Welch, P. D. (1967). The use of fast Fourier transform for the estimation of
+  power spectra: A method based on time averaging over short, modified
+  periodograms. *IEEE Transactions on Audio and Electroacoustics*, 15(2), 70-73.
+  [doi:10.1109/TAU.1967.1161901](https://doi.org/10.1109/TAU.1967.1161901)
 
 ## Acknowledgments
 
 Thanks to Ferry Prins and Enrique Arévalo Rodríguez for discussions on
 non-Gaussian transport profiles that informed the design of this package.
+
+## Contributing and community
+
+Contributions, bug reports, and feature requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for development setup, how to run the tests,
+and how to submit changes. Participation is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Development disclosure
+
+The method, design, and direction of this package are the author's own. It
+builds on the author's prior work: the spectral contrast-to-noise estimator
+introduced in Thiebes and Grumstrup (2024) and developed further in the
+[DICE](https://github.com/thiebes/DICE) repository (see [Background](#background)). The estimator's
+structure, the choices behind each pipeline step, the validation strategy, and
+the critique that shaped successive revisions all reflect the author's own
+thinking.
+
+Generative AI tools (Anthropic Claude) assisted primarily with code: drafting
+implementations from the author's specifications, writing tests, and editing
+documentation. The author directed this work, reviewed and corrected every
+contribution, and characterized the estimator by the Monte Carlo validation
+reported under [Accuracy](#accuracy).
 
 ## License
 
