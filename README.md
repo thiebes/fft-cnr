@@ -15,14 +15,19 @@ Measure the contrast-to-noise ratio (CNR) of a 1-D signal profile from a
 single acquisition. You do not need repeat frames or a separate background
 region.
 
-Here CNR means the peak signal amplitude above the baseline, divided by the
-RMS of the noise. This is a peak-amplitude signal-to-noise ratio, not a
-two-region (difference-of-means) contrast measure.
+Here CNR means the peak signal amplitude above the baseline, divided by the RMS
+of the noise. The contrast is the peak's height above the baseline, the part that
+stands out from the background, so dividing it by the noise gives the ratio that
+governs whether the feature can be detected and measured. This is a single-peak
+contrast, distinct from the two-region (difference-of-means) CNR measured with
+two hand-drawn regions in MRI or CT.
 
 `fft-cnr` uses the Fourier transform to separate the slowly varying signal from
 the rapid, point-to-point noise. The package automatically finds the frequency
 boundary between the two (using a model-selection score, the Akaike information
 criterion or AIC) and returns a CNR estimate with a 95% confidence interval.
+
+Full documentation is at [fft-cnr.readthedocs.io](https://fft-cnr.readthedocs.io).
 
 ## Installation
 
