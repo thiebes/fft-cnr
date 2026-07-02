@@ -657,16 +657,16 @@ toml = [
 
 [[package]]
 name = "curved-text"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/8f/3c9f1a9ed942eb25865e90cb1a5ca4aff2627bde1cb416a4d339aa134cec/curved_text-0.4.0.tar.gz", hash = "sha256:9ab4b8c83ba815eb89aa8f1f32ab1d4fcd0e9ce27594f446778d0f8fad61a1ae", size = 32396, upload-time = "2026-06-19T01:01:12.664Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/e5/46e91d0d4fddbe29b54339bf81ca4c03112cf444048f50e856adbc9da99d/curved_text-0.5.0.tar.gz", hash = "sha256:ea1f94ea9992af022684952e2fab3164e4376b256990bfadc834390d701f5a0c", size = 36334, upload-time = "2026-06-24T22:11:42.838Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/f0/b3aca73ae9858d330ba502f7da1e1a23ea6af12b1f7de5ef17c89f0b8be2/curved_text-0.4.0-py3-none-any.whl", hash = "sha256:cbb693c82d0e2cf668ce49e6e7ef57eff747a2f3addc7bb5f6912713c6f247ba", size = 18788, upload-time = "2026-06-19T01:01:11.5Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/74/5e52a8f606b5d832334ad49843896615ad146ef12c6d3b9d7b7cf1c87362/curved_text-0.5.0-py3-none-any.whl", hash = "sha256:2e4762f0c5c78b02a4c24cceb077e78077be866ff8db13f1c52969087b43ad7a", size = 20959, upload-time = "2026-06-24T22:11:41.484Z" },
 ]
 
 [[package]]
@@ -843,7 +843,7 @@ provides-extras = ["dev", "validation", "docs"]
 
 [package.metadata.requires-dev]
 assets = [
-    { name = "curved-text", specifier = ">=0.4.0" },
+    { name = "curved-text", specifier = ">=0.5.0" },
     { name = "matplotlib", specifier = ">=3.7" },
 ]
 dev = [

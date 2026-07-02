@@ -232,8 +232,14 @@ def render():
                color=BLUE, zorder=3)
 
     axB.set_xlim(fft_freq[1], welch_freq[-1])
-    axB.set_ylim(0.25, max(fft_power[1], Pxx[1]) * 1.6)
-    axB.set_yticks([1, 10, 100])         # decades within the data; no stray tick
+    # Range-frame y-axis: show only the decade ticks that fall inside the data
+    # span, then cap the view just above the spectral peak. Order matters --
+    # set_yticks pulls the view up to include every listed tick, so naming 100
+    # (above the ~62 peak) would re-expand the axis to the next empty decade and
+    # leave 100 and its minor ticks floating above where the left spine ends.
+    y_top = max(float(fft_power[1:].max()), float(Pxx[1:].max()))
+    axB.set_yticks([d for d in (0.1, 1, 10, 100, 1000) if 0.25 <= d <= y_top])
+    axB.set_ylim(0.25, y_top * 1.1)      # set after the ticks so it holds
     ymin, ymax = axB.get_ylim()
     # Knee divider, full height -- the search inset moved to the lower-left, so
     # the line is clear to run to the top.
@@ -292,7 +298,7 @@ def render():
     # span the data occupy.
     yA = (min(noisy.min(), baseline), max(noisy.max(), peak_y))
     axA.set_ylim(yA[0] - 0.3, yA[1] + 0.3)
-    yB_hi = max(float(fft_power[1:].max()), float(Pxx[1:].max()))
+    yB_hi = y_top
     spans = {axA: ((0, N - 1), yA),
              axB: ((fft_freq[1], welch_freq[-1]), (0.25, yB_hi))}
     for ax, ((xlo, xhi), (ylo, yhi)) in spans.items():
@@ -339,9 +345,35 @@ def render():
 
     out = "assets/hero.png"
     fig.savefig(out, dpi=200)
+
+    # Transparent-margin variant: the two panels keep their white backdrop so
+    # the traces and dark labels stay readable, but the figure margin around
+    # them is transparent, so the image drops onto any page background. Pin the
+    # axes (and inset) faces white first, then clear only the figure patch.
+    for ax in (axA, axB):
+        ax.set_facecolor("w")
+    out_transparent = "assets/hero_transparent.png"
+    fig.savefig(out_transparent, dpi=200, transparent=False, facecolor="none",
+                edgecolor="none")
+
+    # Per-panel exports: each panel as its own file. Crop the composed figure to
+    # one axes at a time -- its labels, legend, inset, and annotations are all
+    # children of that axes, so its tight bbox contains exactly that panel. Same
+    # white panel on a transparent margin as hero_transparent.png.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    panel_outs = []
+    for name, ax in (("a", axA), ("b", axB)):
+        ext = ax.get_tightbbox(renderer).transformed(
+            fig.dpi_scale_trans.inverted()).expanded(1.03, 1.03)
+        p = f"assets/hero_panel_{name}.png"
+        fig.savefig(p, dpi=200, bbox_inches=ext, facecolor="none",
+                    edgecolor="none")
+        panel_outs.append(p)
+
     plt.close(fig)
-    return out
+    return [out, out_transparent, *panel_outs]
 
 
-print("wrote", render())
+print("wrote", *render())
 print(f"CNR={cnr:.1f}, A={amplitude:.2f}, sigma={sigma:.3f}, knee bin={kc}")
