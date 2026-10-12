@@ -127,7 +127,12 @@ reads the peak of the resulting smoothed profile, measured above a baseline
 estimated from the outer quarter of the profile on each side. This works for any
 profile shape and assumes nothing about its functional form. If the signal
 extends into those outer regions, the baseline is contaminated and the amplitude
-is underestimated.
+is underestimated, independent of the noise. The profile therefore needs to
+extend well beyond the feature: for a Gaussian, a profile 2.7 full widths at
+half maximum (FWHM) long reads the amplitude about 8.5% low, 4.1 FWHM about 1%
+low, and 5.4 FWHM within 0.1%. When the profile cannot be made longer, the
+matched filter and the generalized Gaussian fit do not use this baseline margin
+and are unaffected.
 
 Two alternatives are available:
 
@@ -139,7 +144,14 @@ Two alternatives are available:
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
   to flat-topped. Useful when fitted parameters (center, width, shape) are
-  needed in addition to CNR.
+  needed in addition to CNR. On noise-dominated profiles (CNR below about 1)
+  the fit can degenerate, for example into a flat-topped model as wide as the
+  profile whose amplitude and baseline cancel. A fit whose amplitude exceeds
+  twice the data's peak-to-peak range, or whose width is pinned at the profile
+  length, is refused, and the estimate falls back to the peak method;
+  `diagnostics["gaussian_fit_rejected"]` names the reason, and
+  `diagnostics["gaussian_fit_params"]` is then absent, as it is when the fit
+  fails to converge.
 
 The `result.amplitude_snr` property reports the matched-filter signal-to-noise
 ratio (amplitude over its standard error). A larger value means the amplitude
@@ -322,9 +334,16 @@ Median estimated-to-true CNR ratio at N=512, by amplitude method:
 | Lorentzian | 0.98--1.01 | 1.06--1.09 | 0.99--1.00 |
 
 The peak method stays within 3% of the true CNR for most shapes from CNR=5
-upward. The main exception is flat-topped profiles, where the spectral
-low-pass filter rounds off the flat peak (up to 7% positive bias at CNR=3,
-7% negative at CNR=100). The generalized Gaussian fit is accurate when the
+upward. The main exception is flat-topped profiles (up to 7% positive bias at
+CNR=3, 7% negative at CNR=100). The negative bias at high CNR comes from the
+noise estimate, not the amplitude, so it affects every amplitude method equally:
+the sharp shoulders of a flat-topped profile put signal power above the
+signal/noise boundary, where it is counted as noise. That leaked power is
+fixed while the noise falls, so the noise level reads progressively high as the
+CNR rises (for p=4 and sigma=20 samples, 2% high at CNR=50, 8% at CNR=100, and
+29% at CNR=200, where the CNR reads about 0.77 of the true value and the
+`lowfreq_dominated` flag does not fire). A wider feature of the same shape
+leaks less and holds its accuracy to higher CNR. The generalized Gaussian fit is accurate when the
 signal is in the model family but introduces 6--16% positive bias on shapes
 outside it (Gaussian mixture, Lorentzian). The matched filter tracks the true
 CNR to within 2% when the template matches the signal shape.
@@ -332,8 +351,11 @@ CNR to within 2% when the template matches the signal shape.
 ### Profile length
 
 Shorter profiles reduce accuracy slightly. At N=128 (peak method, Gaussian
-signal), the estimator shows 6--8% negative bias at high CNR because the
-Welch PSD has fewer segments for knee detection.
+signal with sigma=20 samples), the estimator shows 6--8% negative bias at high
+CNR. This is the baseline margin described under
+[Amplitude estimation](#amplitude-estimation), not the noise estimate: the
+profile is only 2.7 FWHM long, so the outer-quarter baseline sits on the
+Gaussian's tails and the amplitude reads about 8.5% low even without noise.
 
 | N | CNR=5 | CNR=20 | CNR=100 |
 | ------- | --------- | --------- | --------- |

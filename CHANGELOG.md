@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails to converge, `diagnostics["gaussian_fit_params"]` is absent on
   fallback. Fits at CNR 1 and above are not refused in validation.
 
+### Documentation
+
+- README: the peak method's baseline margin is quantified (profile length in
+  full widths at half maximum against amplitude deficit), and the N=128 bias in
+  "Profile length" is attributed to that margin rather than to the Welch
+  segment count.
+- README: the negative CNR bias on flat-topped profiles at high CNR is
+  attributed to signal leakage above the signal/noise boundary, which inflates
+  the noise level for every amplitude method, rather than to the low-pass
+  filter rounding the peak.
+
 ## [0.3.1] - 2026-06-29
 
 ### Added
