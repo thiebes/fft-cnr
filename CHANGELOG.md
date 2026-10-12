@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The generalized-Gaussian path refuses a degenerate fit instead of reporting
+  it. On noise-dominated profiles (CNR below about 1) the fit could run away,
+  for example to a flat-topped model as wide as the profile whose amplitude and
+  baseline cancel, and report a CNR of tens to thousands. A fit whose amplitude
+  exceeds twice the data's peak-to-peak range, or whose width is pinned at the
+  profile length, now falls back to the peak method
+  (`amplitude_method == "generalized_gaussian_fit_fallback"`), and the new
+  `diagnostics["gaussian_fit_rejected"]` names the reason. As with a fit that
+  fails to converge, `diagnostics["gaussian_fit_params"]` is absent on
+  fallback. Fits at CNR 1 and above are not refused in validation.
+
 ## [0.3.1] - 2026-06-29
 
 ### Added
