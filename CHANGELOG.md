@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   white-noise projection (windowed data onto the windowed template, noise-only
   weighting), replacing the `Pxx_full`-weighted form whose signal-contaminated
   spectrum overstated the error and widened `cnr_ci95` on the template path.
+- Matched-filter amplitude is now the same flat windowed projection
+  (`sum(xw * tw) / sum(tw**2)`), replacing the `Pxx_full`-weighted projection.
+  On an isolated feature the two agree closely, so template-path amplitudes are
+  essentially unchanged there; when a second feature lies in the window, the
+  amplitude can differ from the previous release.
 - `amplitude_snr` is now defined only on the matched-filter (template) path and
   returns NaN on the peak and generalized-Gaussian paths, where the standard
   error is a different quantity that is not comparable to it.
