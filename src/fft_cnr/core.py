@@ -508,6 +508,34 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
         return np.nan, np.nan, {}
 
 
+# Degenerate generalized-Gaussian fits on noise-dominated profiles. A fitted
+# amplitude beyond this multiple of the data's peak-to-peak range is not a
+# height present in the data: either a flat-topped model as wide as the record
+# trades amplitude against baseline without limit, or the fit tracks only the
+# tail of a narrow feature outside the record.
+_GG_MAX_AMPLITUDE_TO_PTP = 2.0
+# Relative tolerance for treating the fitted width as pinned at its upper bound
+# (the record length), where amplitude and baseline are no longer separable.
+_GG_SIGMA_BOUND_RTOL = 1e-3
+
+
+def _degenerate_gaussian_fit_reason(fit_params: dict, x: np.ndarray) -> str | None:
+    """Name why a generalized-Gaussian fit is degenerate, or None if it is usable.
+
+    Only fits that cannot describe a feature in the data are refused. Shape at
+    its bound and a center outside the record are deliberately not tested:
+    both occur on genuine flat-topped and low-CNR profiles, and refusing them
+    would bias the CNR in the regime the fit is meant to serve.
+    """
+    if not fit_params:
+        return None
+    if abs(fit_params["amplitude"]) > _GG_MAX_AMPLITUDE_TO_PTP * np.ptp(x):
+        return "amplitude_exceeds_data_range"
+    if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * x.size:
+        return "sigma_at_upper_bound"
+    return None
+
+
 _LOWFREQ_OFFPEAK_HALFWIDTH_FRAC = 0.25
 _LOWFREQ_DOMINANCE_THRESHOLD = 2.5
 
@@ -710,7 +738,11 @@ def fft_cnr(
         arbitrary profile shapes. ``"generalized_gaussian"`` fits a
         5-parameter generalized Gaussian with a shape exponent that
         accommodates non-zero excess kurtosis, providing fitted
-        parameters (center, width, shape) in diagnostics.
+        parameters (center, width, shape) in diagnostics. A fit that fails,
+        or that is degenerate (fitted amplitude more than twice the data's
+        peak-to-peak range, or width pinned at the record length), falls back
+        to the peak method; a refusal is named in
+        ``diagnostics["gaussian_fit_rejected"]``.
         Ignored when ``template`` is given.
     window : str
         Tapering window: ``"tukey"``, ``"hann"``, or ``"none"``.
@@ -855,6 +887,7 @@ def fft_cnr(
 
     # Amplitude estimation
     gfit_params: dict = {}
+    gfit_rejected: str | None = None
     if template is not None:
         t = np.asarray(template, float).ravel()
         if t.size != N:
@@ -887,7 +920,10 @@ def fft_cnr(
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
         Amp, Amp_se, gfit_params = _fit_generalized_gaussian_amplitude(x_raw)
-        if np.isnan(Amp):
+        gfit_rejected = _degenerate_gaussian_fit_reason(gfit_params, x_raw)
+        if gfit_rejected is not None:
+            gfit_params = {}
+        if not gfit_params:
             amp_method = "generalized_gaussian_fit_fallback"
         else:
             amp_method = "generalized_gaussian_fit"
@@ -957,6 +993,8 @@ def fft_cnr(
         diags["roi"] = roi_bounds
     if gfit_params:
         diags["gaussian_fit_params"] = gfit_params
+    if gfit_rejected is not None:
+        diags["gaussian_fit_rejected"] = gfit_rejected
     if return_bandpassed_noise:
         diags["x_bp"] = d.x_bp
     diags.update(noise_model_diags)

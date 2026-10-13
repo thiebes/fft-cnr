@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The generalized-Gaussian path refuses a degenerate fit instead of reporting
+  it. On noise-dominated profiles (CNR below about 1) the fit could run away,
+  for example to a flat-topped model as wide as the profile whose amplitude and
+  baseline cancel, and report a CNR of tens to thousands. A fit whose amplitude
+  exceeds twice the data's peak-to-peak range, or whose width is pinned at the
+  profile length, now falls back to the peak method
+  (`amplitude_method == "generalized_gaussian_fit_fallback"`), and the new
+  `diagnostics["gaussian_fit_rejected"]` names the reason. As with a fit that
+  fails to converge, `diagnostics["gaussian_fit_params"]` is absent on
+  fallback, so code that indexes it directly now raises `KeyError` on these
+  profiles; read it with `.get()` or check `amplitude_method` first. Fits at
+  CNR 1 and above are not refused in validation.
+
+### Documentation
+
+- README: the peak method's baseline margin is quantified (profile length in
+  full widths at half maximum against amplitude deficit), and the N=128 bias in
+  "Profile length" is attributed to that margin rather than to the Welch
+  segment count.
+- README: the negative CNR bias on flat-topped profiles at high CNR is
+  attributed to signal leakage above the signal/noise boundary, which inflates
+  the noise level for every amplitude method, rather than to the low-pass
+  filter rounding the peak.
+
 ## [0.3.1] - 2026-06-29
 
 ### Added
@@ -55,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   white-noise projection (windowed data onto the windowed template, noise-only
   weighting), replacing the `Pxx_full`-weighted form whose signal-contaminated
   spectrum overstated the error and widened `cnr_ci95` on the template path.
+- Matched-filter amplitude is now the same flat windowed projection
+  (`sum(xw * tw) / sum(tw**2)`), replacing the `Pxx_full`-weighted projection.
+  On an isolated feature the two agree closely, so template-path amplitudes are
+  essentially unchanged there; when a second feature lies in the window, the
+  amplitude can differ from the previous release.
 - `amplitude_snr` is now defined only on the matched-filter (template) path and
   returns NaN on the peak and generalized-Gaussian paths, where the standard
   error is a different quantity that is not comparable to it.
