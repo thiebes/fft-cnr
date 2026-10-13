@@ -730,7 +730,10 @@ def fft_cnr(
     template : np.ndarray or None
         Expected signal shape for matched-filter amplitude estimation.
         If None, amplitude is estimated using the method specified by
-        ``fit_model`` (default: ``"peak"``).
+        ``fit_model`` (default: ``"peak"``). The template is mean-subtracted
+        before the projection, so any other feature in the window shifts the
+        amplitude in proportion to its own amplitude; use explicit ``roi``
+        bounds that exclude such a neighbour, including its tails.
     fit_model : str or None
         Amplitude estimation method when no template is provided.
         ``"peak"`` (default) applies a spectral low-pass filter and
