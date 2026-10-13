@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`amplitude_method == "generalized_gaussian_fit_fallback"`), and the new
   `diagnostics["gaussian_fit_rejected"]` names the reason. As with a fit that
   fails to converge, `diagnostics["gaussian_fit_params"]` is absent on
-  fallback. Fits at CNR 1 and above are not refused in validation.
+  fallback, so code that indexes it directly now raises `KeyError` on these
+  profiles; read it with `.get()` or check `amplitude_method` first. Fits at
+  CNR 1 and above are not refused in validation.
 
 ### Documentation
 
