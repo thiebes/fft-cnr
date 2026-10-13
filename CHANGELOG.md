@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attributed to signal leakage above the signal/noise boundary, which inflates
   the noise level for every amplitude method, rather than to the low-pass
   filter rounding the peak.
+- README and `template` docstring: a second feature inside the window biases
+  the matched-filter amplitude in proportion to its own amplitude, because the
+  template is mean-subtracted; explicit `roi` bounds that exclude the
+  neighbour remove the bias when it is well separated.
 
 ## [0.3.1] - 2026-06-29
 
