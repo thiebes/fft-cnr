@@ -345,8 +345,9 @@ signal/noise boundary, where it is counted as noise. That leaked power is
 fixed while the noise falls, so the noise level reads progressively high as the
 CNR rises (for p=4 and sigma=20 samples, 2% high at CNR=50, 8% at CNR=100, and
 29% at CNR=200, where the CNR reads about 0.77 of the true value and the
-`lowfreq_dominated` flag does not fire). A wider feature of the same shape
-leaks less and holds its accuracy to higher CNR. The generalized Gaussian fit is accurate when the
+`lowfreq_dominated` flag does not fire; a diagnostic for this case is tracked
+in issue #15). A wider feature of the same shape leaks less and holds its
+accuracy to higher CNR. The generalized Gaussian fit is accurate when the
 signal is in the model family but introduces 6--16% positive bias on shapes
 outside it (Gaussian mixture, Lorentzian). The matched filter tracks the true
 CNR to within 2% when the template matches the signal shape.
