@@ -86,8 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Matched-filter amplitude is now the same flat windowed projection
   (`sum(xw * tw) / sum(tw**2)`), replacing the `Pxx_full`-weighted projection.
   On an isolated feature the two agree closely, so template-path amplitudes are
-  essentially unchanged there; when a second feature lies in the window, the
-  amplitude can differ from the previous release.
+  essentially unchanged there; when a second feature lies in the window, or the
+  template shape does not match the signal, the amplitude can differ from the
+  previous release.
 - `amplitude_snr` is now defined only on the matched-filter (template) path and
   returns NaN on the peak and generalized-Gaussian paths, where the standard
   error is a different quantity that is not comparable to it.
