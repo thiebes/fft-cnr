@@ -451,6 +451,11 @@ def _estimate_noise_model(
     return model, {"var_signal_p": p_value}
 
 
+# Upper bound on the generalized-Gaussian width, as a multiple of the profile
+# length. Shared by the fit bounds and the degenerate-fit screen.
+_GG_SIGMA_MAX_TO_LENGTH = 1.0
+
+
 def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, dict]:
     """Fit a generalized Gaussian peak + constant baseline to a 1-D profile.
 
@@ -489,7 +494,7 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
     p0 = [amplitude_init, center_init, sigma_init, baseline_init, 2.0]
     bounds = (
         [-np.inf, -0.5 * N, 0.5, -np.inf, 0.5],
-        [np.inf, 1.5 * N, float(N), np.inf, 10.0],
+        [np.inf, 1.5 * N, _GG_SIGMA_MAX_TO_LENGTH * N, np.inf, 10.0],
     )
 
     try:
@@ -515,7 +520,8 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
 # tail of a narrow feature outside the record.
 _GG_MAX_AMPLITUDE_TO_PTP = 2.0
 # Relative tolerance for treating the fitted width as pinned at its upper bound
-# (the record length), where amplitude and baseline are no longer separable.
+# (_GG_SIGMA_MAX_TO_LENGTH times the record length), where amplitude and
+# baseline are no longer separable.
 _GG_SIGMA_BOUND_RTOL = 1e-3
 
 
@@ -531,7 +537,8 @@ def _degenerate_gaussian_fit_reason(fit_params: dict, x: np.ndarray) -> str | No
         return None
     if abs(fit_params["amplitude"]) > _GG_MAX_AMPLITUDE_TO_PTP * np.ptp(x):
         return "amplitude_exceeds_data_range"
-    if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * x.size:
+    sigma_max = _GG_SIGMA_MAX_TO_LENGTH * x.size
+    if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * sigma_max:
         return "sigma_at_upper_bound"
     return None
 

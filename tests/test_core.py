@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from fft_cnr import CNREstimate, NoiseModel, fft_cnr
+from fft_cnr.core import _GG_SIGMA_MAX_TO_LENGTH
 
 
 class TestFFTCNR:
@@ -367,7 +368,8 @@ class TestEdgeCases:
         """Width pinned at the record length is refused even with an in-range amplitude."""
         N = 241
         y = np.random.default_rng(0).normal(0, 1, N)
-        popt = np.array([1.0, 120.0, N - 0.0002, 0.0, 10.0])
+        sigma_max = _GG_SIGMA_MAX_TO_LENGTH * N
+        popt = np.array([1.0, 120.0, sigma_max - 0.0002, 0.0, 10.0])
         with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
             result = fft_cnr(y, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
