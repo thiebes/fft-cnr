@@ -43,7 +43,7 @@ result = fft_cnr(noisy, template=signal)
 
 # With a generalized Gaussian fit (when shape parameters are also wanted)
 result = fft_cnr(noisy, fit_model="generalized_gaussian")
-print(result.diagnostics["gaussian_fit_params"])
+print(result.diagnostics.get("gaussian_fit_params"))  # absent on fallback
 ```
 
 ## Noise model detection
