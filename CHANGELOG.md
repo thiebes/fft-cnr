@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.2] - 2026-10-19
 
+### Added
+
+- `diagnostics["gaussian_fit_rejected"]` on the generalized-Gaussian path:
+  `"amplitude_exceeds_data_range"` or `"sigma_at_upper_bound"` when a
+  degenerate fit is refused, absent otherwise.
+
 ### Fixed
 
 - The generalized-Gaussian path refuses two kinds of degenerate fit instead of

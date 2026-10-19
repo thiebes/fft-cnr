@@ -807,6 +807,11 @@ def fft_cnr(
         (and flip the amplitude sign) under noise. It is False on the
         matched-filter path, where the template fixes the feature.
 
+        When ``fit_model="generalized_gaussian"`` refuses a degenerate fit, the
+        diagnostics carry ``gaussian_fit_rejected``, naming the reason:
+        ``"amplitude_exceeds_data_range"`` or ``"sigma_at_upper_bound"``. The
+        key is absent when the fit is kept or fails to converge.
+
     Raises
     ------
     ValueError
