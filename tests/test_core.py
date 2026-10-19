@@ -197,6 +197,27 @@ class TestGeneralizedGaussianFit:
         fitted_p = result.diagnostics["gaussian_fit_params"]["shape"]
         assert abs(fitted_p - 3.0) < 1.0
 
+    def test_keeps_flat_top_at_shape_bound(self):
+        """A genuine flat-topped profile whose shape hits its bound is not refused."""
+        signal, _, _, _ = self._make_gen_gaussian_signal(
+            N=512, amplitude=20.0, sigma=40.0, p=12.0, seed=3
+        )
+        result = fft_cnr(signal, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert "gaussian_fit_rejected" not in result.diagnostics
+        assert result.diagnostics["gaussian_fit_params"]["shape"] == pytest.approx(10.0, abs=0.1)
+
+    @pytest.mark.parametrize("cnr", [1.0, 2.0])
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3])
+    def test_keeps_valid_fit_near_cnr_one(self, cnr, seed):
+        """The degenerate-fit screen must not refuse converged fits at CNR 1 to 2,
+        where a refusal would bias the CNR of frames the fit is meant to serve."""
+        grid = np.linspace(-6, 6, 241)
+        y = cnr * np.exp(-0.5 * grid**2) + np.random.default_rng(seed).normal(0, 1, grid.size)
+        result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert "gaussian_fit_rejected" not in result.diagnostics
+
 
 class TestPeakMethod:
     """Tests for the non-parametric peak amplitude estimation path."""
@@ -340,17 +361,18 @@ class TestEdgeCases:
         assert "gaussian_fit_rejected" not in result.diagnostics
 
     @pytest.mark.parametrize(
-        ("seed", "reason"),
+        "seed",
         [
             # Flat-topped model as wide as the record: amplitude and baseline
-            # cancel (unrefused: cnr ~1039, amplitude ~994, sigma at N).
-            (125, "amplitude_exceeds_data_range"),
+            # cancel (unrefused: cnr ~1039, amplitude ~994, sigma at N). The
+            # amplitude rule is checked first, so it names the refusal.
+            125,
             # Tail of a narrow feature centred outside the record (unrefused:
             # cnr ~30, amplitude ~32, center ~-3).
-            (108, "amplitude_exceeds_data_range"),
+            108,
         ],
     )
-    def test_generalized_gaussian_refuses_degenerate_fit(self, seed, reason):
+    def test_generalized_gaussian_refuses_degenerate_fit(self, seed):
         """A runaway fit on a CNR-0.3 frame falls back to the peak read."""
         grid = np.linspace(-6, 6, 241)
         clean = 0.3 * np.exp(-0.5 * grid**2)
@@ -358,7 +380,7 @@ class TestEdgeCases:
         result = fft_cnr(y, fit_model="generalized_gaussian")
         peak = fft_cnr(y, fit_model="peak")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
-        assert result.diagnostics["gaussian_fit_rejected"] == reason
+        assert result.diagnostics["gaussian_fit_rejected"] == "amplitude_exceeds_data_range"
         assert "gaussian_fit_params" not in result.diagnostics
         assert result.amplitude == pytest.approx(peak.amplitude)
         assert result.cnr == pytest.approx(peak.cnr)
@@ -375,17 +397,6 @@ class TestEdgeCases:
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
         assert result.diagnostics["gaussian_fit_rejected"] == "sigma_at_upper_bound"
         assert "gaussian_fit_params" not in result.diagnostics
-
-    def test_generalized_gaussian_keeps_flat_top_at_shape_bound(self):
-        """A genuine flat-topped profile whose shape hits its bound is not refused."""
-        rng = np.random.default_rng(3)
-        N = 512
-        grid = np.arange(N, dtype=float)
-        clean = 20.0 * np.exp(-0.5 * np.abs((grid - N / 2) / 40.0) ** 12)
-        result = fft_cnr(clean + rng.normal(0, 1.0, N), fit_model="generalized_gaussian")
-        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
-        assert "gaussian_fit_rejected" not in result.diagnostics
-        assert result.diagnostics["gaussian_fit_params"]["shape"] == pytest.approx(10.0, abs=0.1)
 
     def test_custom_welch_params(self):
         """Custom Welch parameters should be used and reported."""
