@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The generalized-Gaussian path refuses a degenerate fit instead of reporting
-  it. On noise-dominated profiles (CNR below about 1) the fit could run away,
-  for example to a flat-topped model as wide as the profile whose amplitude and
+- The generalized-Gaussian path refuses two kinds of degenerate fit instead of
+  reporting them. On noise-dominated profiles the fit could run away, for
+  example to a flat-topped model as wide as the profile whose amplitude and
   baseline cancel, and report a CNR of tens to thousands. A fit whose amplitude
   exceeds twice the data's peak-to-peak range, or whose width is pinned at the
   profile length, now falls back to the peak method
@@ -19,8 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diagnostics["gaussian_fit_rejected"]` names the reason. As with a fit that
   fails to converge, `diagnostics["gaussian_fit_params"]` is absent on
   fallback, so code that indexes it directly now raises `KeyError` on these
-  profiles; read it with `.get()` or check `amplitude_method` first. Fits at
-  CNR 1 and above are not refused in validation.
+  profiles; read it with `.get()` or check `amplitude_method` first. In
+  validation, no fit near the true amplitude was refused. Refusals are not
+  limited to low CNR: on features wide relative to the profile, or on short
+  profiles, 1--5% of fits at CNR 1 to 3 were refused, each of them degenerate.
+  A runaway fit that meets neither condition is still reported: at CNR 0.3 to
+  1, about 1% of profiles read a CNR of 5 to 11 from fits centered outside the
+  profile or with a width just under the profile length.
 
 ### Documentation
 

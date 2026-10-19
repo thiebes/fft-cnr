@@ -144,14 +144,17 @@ Two alternatives are available:
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
   to flat-topped. Useful when fitted parameters (center, width, shape) are
-  needed in addition to CNR. On noise-dominated profiles (CNR below about 1)
-  the fit can degenerate, for example into a flat-topped model as wide as the
+  needed in addition to CNR. The fit can degenerate, most often on
+  noise-dominated profiles, for example into a flat-topped model as wide as the
   profile whose amplitude and baseline cancel. A fit whose amplitude exceeds
   twice the data's peak-to-peak range, or whose width is pinned at the profile
-  length, is refused, and the estimate falls back to the peak method;
-  `diagnostics["gaussian_fit_rejected"]` names the reason, and
+  length, is refused at any CNR, and the estimate falls back to the peak
+  method; `diagnostics["gaussian_fit_rejected"]` names the reason, and
   `diagnostics["gaussian_fit_params"]` is then absent, as it is when the fit
-  fails to converge.
+  fails to converge. The screen tests only these two conditions. A runaway fit
+  that meets neither, such as one centered outside the profile, is still
+  reported, so treat a generalized-Gaussian CNR far above the peak-method value
+  on a noisy profile with caution.
 
 The `result.amplitude_snr` property reports the matched-filter signal-to-noise
 ratio (amplitude over its standard error). A larger value means the amplitude
