@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The source distribution lists its contents explicitly (package, tests, docs,
+  validation scripts, and the top-level metadata files), so it no longer
+  carries the README image assets or files that are ignored only locally.
+- CI builds the package on pull requests and checks it with Twine, and
+  Dependabot proposes weekly updates for the SHA-pinned GitHub Actions.
+
 ## [0.3.3] - 2026-10-20
 
 ### Changed
