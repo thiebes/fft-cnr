@@ -6,7 +6,11 @@ import numpy as np
 import pytest
 
 from fft_cnr import CNREstimate, NoiseModel, fft_cnr
-from fft_cnr.core import _GG_SIGMA_MAX_TO_LENGTH
+from fft_cnr.core import (
+    _GG_CENTER_MAX_TO_LENGTH,
+    _GG_CENTER_MIN_TO_LENGTH,
+    _GG_SIGMA_MAX_TO_LENGTH,
+)
 
 
 class TestFFTCNR:
@@ -204,7 +208,7 @@ class TestGeneralizedGaussianFit:
         )
         result = fft_cnr(signal, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
-        assert "gaussian_fit_rejected" not in result.diagnostics
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
         assert result.diagnostics["gaussian_fit_params"]["shape"] == pytest.approx(10.0, abs=0.1)
 
     @pytest.mark.parametrize("cnr", [1.0, 2.0])
@@ -218,8 +222,24 @@ class TestGeneralizedGaussianFit:
         )
         result = fft_cnr(signal, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
-        assert "gaussian_fit_rejected" not in result.diagnostics
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
         assert abs(result.diagnostics["gaussian_fit_params"]["center"] - 120.0) < 20.0
+
+    def test_refuses_fit_centered_at_bound(self):
+        """A CNR-0.3 frame whose fit pins its center at the lower bound, half a
+        profile outside the data, falls back to the peak read. Unrefused, the
+        fit reads a negative wing (amplitude about -10.8, fit CNR about 10)
+        under a positive peak; its amplitude is within twice the data range,
+        so only the center rule catches it."""
+        signal, _, _, _ = self._make_gen_gaussian_signal(
+            N=241, amplitude=0.3, sigma=20.0, p=2.0, seed=100036
+        )
+        result = fft_cnr(signal, fit_model="generalized_gaussian")
+        peak = fft_cnr(signal, fit_model="peak")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+        assert result.cnr == pytest.approx(peak.cnr)
+        assert result.cnr < 5.0
 
 
 class TestPeakMethod:
@@ -361,7 +381,7 @@ class TestEdgeCases:
             result = fft_cnr(signal + noise, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
         assert np.isfinite(result.cnr)
-        assert "gaussian_fit_rejected" not in result.diagnostics
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
 
     @pytest.mark.parametrize(
         "seed",
@@ -383,7 +403,7 @@ class TestEdgeCases:
         result = fft_cnr(y, fit_model="generalized_gaussian")
         peak = fft_cnr(y, fit_model="peak")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
-        assert result.diagnostics["gaussian_fit_rejected"] == "amplitude_exceeds_data_range"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "amplitude_exceeds_data_range"
         assert "gaussian_fit_params" not in result.diagnostics
         assert result.amplitude == pytest.approx(peak.amplitude)
         assert result.cnr == pytest.approx(peak.cnr)
@@ -398,8 +418,34 @@ class TestEdgeCases:
         with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
             result = fft_cnr(y, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
-        assert result.diagnostics["gaussian_fit_rejected"] == "sigma_at_upper_bound"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "sigma_at_upper_bound"
         assert "gaussian_fit_params" not in result.diagnostics
+
+    @pytest.mark.parametrize(
+        "center_to_length", [_GG_CENTER_MIN_TO_LENGTH, _GG_CENTER_MAX_TO_LENGTH]
+    )
+    def test_generalized_gaussian_refuses_center_at_bound(self, center_to_length):
+        """Center pinned at either fit bound is refused even with an in-range
+        amplitude and width."""
+        N = 241
+        y = np.random.default_rng(0).normal(0, 1, N)
+        popt = np.array([1.0, center_to_length * N, 20.0, 0.0, 2.0])
+        with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+        assert "gaussian_fit_params" not in result.diagnostics
+
+    def test_generalized_gaussian_keeps_center_just_outside_profile(self):
+        """A center outside the profile but clear of its bound is kept: a
+        genuine feature can sit at the edge of the data."""
+        N = 241
+        y = np.random.default_rng(0).normal(0, 1, N)
+        popt = np.array([1.0, -10.0, 20.0, 0.0, 2.0])
+        with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
 
     def test_custom_welch_params(self):
         """Custom Welch parameters should be used and reported."""

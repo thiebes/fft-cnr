@@ -147,14 +147,15 @@ Two alternatives are available:
   needed in addition to CNR. The fit can degenerate, most often on
   noise-dominated profiles, for example into a flat-topped model as wide as the
   profile whose amplitude and baseline cancel. A fit whose amplitude exceeds
-  twice the data's peak-to-peak range, or whose width is pinned at the profile
-  length, is refused at any CNR, and the estimate falls back to the peak
-  method; `diagnostics["gaussian_fit_rejected"]` names the reason, and
+  twice the data's peak-to-peak range, whose width is pinned at the profile
+  length, or whose center is pinned at its bound half a profile length outside
+  the data, is refused at any CNR, and the estimate falls back to the peak
+  method; `diagnostics["gaussian_fit_rejection_reason"]` names the reason, and
   `diagnostics["gaussian_fit_params"]` is then absent, as it is when the fit
-  fails to converge. The screen tests only these two conditions. A runaway fit
-  that meets neither, such as one centered outside the profile, is still
-  reported, so treat a generalized-Gaussian CNR far above the peak-method value
-  on a noisy profile with caution.
+  fails to converge. The screen tests only these three conditions. A runaway
+  fit that meets none of them, such as a narrow fit centered just outside the
+  profile, is still reported, so treat a generalized-Gaussian CNR far above
+  the peak-method value on a noisy profile with caution.
 
 The `result.amplitude_snr` property reports the matched-filter signal-to-noise
 ratio (amplitude over its standard error). A larger value means the amplitude
@@ -287,7 +288,7 @@ advanced inspection.
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
-| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), generalized-Gaussian fit-refusal reason (`gaussian_fit_rejected`), and `roi` bounds when set |
+| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), generalized-Gaussian fit-refusal reason (`gaussian_fit_rejection_reason`), and `roi` bounds when set |
 | `noise_model` | `NoiseModel \| None` | Fitted noise structure (`None` unless requested) |
 
 ## Parameters
