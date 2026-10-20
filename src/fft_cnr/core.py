@@ -489,7 +489,7 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
     p0 = [amplitude_init, center_init, sigma_init, baseline_init, 2.0]
     bounds = (
         [-np.inf, -0.5 * N, 0.5, -np.inf, 0.5],
-        [np.inf, 1.5 * N, float(N), np.inf, 10.0],
+        [np.inf, 1.5 * N, _GG_SIGMA_MAX_TO_LENGTH * N, np.inf, 10.0],
     )
 
     try:
@@ -514,8 +514,12 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
 # trades amplitude against baseline without limit, or the fit tracks only the
 # tail of a narrow feature outside the record.
 _GG_MAX_AMPLITUDE_TO_PTP = 2.0
+# Upper bound on the generalized-Gaussian width, as a multiple of the profile
+# length. Shared by the fit bounds and the degenerate-fit screen.
+_GG_SIGMA_MAX_TO_LENGTH = 1.0
 # Relative tolerance for treating the fitted width as pinned at its upper bound
-# (the record length), where amplitude and baseline are no longer separable.
+# (_GG_SIGMA_MAX_TO_LENGTH times the record length), where amplitude and
+# baseline are no longer separable.
 _GG_SIGMA_BOUND_RTOL = 1e-3
 
 
@@ -531,7 +535,8 @@ def _degenerate_gaussian_fit_reason(fit_params: dict, x: np.ndarray) -> str | No
         return None
     if abs(fit_params["amplitude"]) > _GG_MAX_AMPLITUDE_TO_PTP * np.ptp(x):
         return "amplitude_exceeds_data_range"
-    if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * x.size:
+    sigma_max = _GG_SIGMA_MAX_TO_LENGTH * x.size
+    if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * sigma_max:
         return "sigma_at_upper_bound"
     return None
 
@@ -806,6 +811,11 @@ def fft_cnr(
         magnitude rivals it, so the largest-magnitude read could switch features
         (and flip the amplitude sign) under noise. It is False on the
         matched-filter path, where the template fixes the feature.
+
+        When ``fit_model="generalized_gaussian"`` refuses a degenerate fit, the
+        diagnostics carry ``gaussian_fit_rejected``, naming the reason:
+        ``"amplitude_exceeds_data_range"`` or ``"sigma_at_upper_bound"``. The
+        key is absent when the fit is kept or fails.
 
     Raises
     ------

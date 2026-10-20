@@ -144,14 +144,17 @@ Two alternatives are available:
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
   to flat-topped. Useful when fitted parameters (center, width, shape) are
-  needed in addition to CNR. On noise-dominated profiles (CNR below about 1)
-  the fit can degenerate, for example into a flat-topped model as wide as the
+  needed in addition to CNR. The fit can degenerate, most often on
+  noise-dominated profiles, for example into a flat-topped model as wide as the
   profile whose amplitude and baseline cancel. A fit whose amplitude exceeds
   twice the data's peak-to-peak range, or whose width is pinned at the profile
-  length, is refused, and the estimate falls back to the peak method;
-  `diagnostics["gaussian_fit_rejected"]` names the reason, and
+  length, is refused at any CNR, and the estimate falls back to the peak
+  method; `diagnostics["gaussian_fit_rejected"]` names the reason, and
   `diagnostics["gaussian_fit_params"]` is then absent, as it is when the fit
-  fails to converge.
+  fails to converge. The screen tests only these two conditions. A runaway fit
+  that meets neither, such as one centered outside the profile, is still
+  reported, so treat a generalized-Gaussian CNR far above the peak-method value
+  on a noisy profile with caution.
 
 The `result.amplitude_snr` property reports the matched-filter signal-to-noise
 ratio (amplitude over its standard error). A larger value means the amplitude
@@ -167,7 +170,7 @@ result = fft_cnr(noisy, template=signal)
 
 # With a generalized Gaussian fit
 result = fft_cnr(noisy, fit_model="generalized_gaussian")
-print(result.diagnostics["gaussian_fit_params"])
+print(result.diagnostics.get("gaussian_fit_params"))  # absent on fallback
 ```
 
 ## Noise model detection
@@ -284,7 +287,7 @@ advanced inspection.
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
-| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), and `roi` bounds when set |
+| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), generalized-Gaussian fit-refusal reason (`gaussian_fit_rejected`), and `roi` bounds when set |
 | `noise_model` | `NoiseModel \| None` | Fitted noise structure (`None` unless requested) |
 
 ## Parameters
@@ -342,8 +345,9 @@ signal/noise boundary, where it is counted as noise. That leaked power is
 fixed while the noise falls, so the noise level reads progressively high as the
 CNR rises (for p=4 and sigma=20 samples, 2% high at CNR=50, 8% at CNR=100, and
 29% at CNR=200, where the CNR reads about 0.77 of the true value and the
-`lowfreq_dominated` flag does not fire). A wider feature of the same shape
-leaks less and holds its accuracy to higher CNR. The generalized Gaussian fit is accurate when the
+`lowfreq_dominated` flag does not fire; a diagnostic for this case is tracked
+in issue #15). A wider feature of the same shape leaks less and holds its
+accuracy to higher CNR. The generalized Gaussian fit is accurate when the
 signal is in the model family but introduces 6--16% positive bias on shapes
 outside it (Gaussian mixture, Lorentzian). The matched filter tracks the true
 CNR to within 2% when the template matches the signal shape.
@@ -414,7 +418,7 @@ value, and the derived peak SNR tracks the true peak signal-to-noise ratio
 If you use fft-cnr in published work, please cite it. The concept DOI below
 always resolves to the latest release; to cite the exact version you used, take
 that version's DOI from the Zenodo record and report the pinned version
-(`pip install fft-cnr==0.3.1`).
+(`pip install fft-cnr==0.3.2`).
 
 > Joseph J. Thiebes. fft-cnr: FFT-based contrast-to-noise ratio estimation from
 > a single frame. Zenodo. https://doi.org/10.5281/zenodo.20691435
@@ -423,7 +427,7 @@ that version's DOI from the Zenodo record and report the pinned version
 @software{thiebes_fft_cnr,
   author    = {Thiebes, Joseph J.},
   title     = {fft-cnr: FFT-based contrast-to-noise ratio estimation from a single frame},
-  version   = {0.3.1},
+  version   = {0.3.2},
   year      = {2026},
   publisher = {Zenodo},
   doi       = {10.5281/zenodo.20691435},

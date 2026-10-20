@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from fft_cnr import CNREstimate, NoiseModel, fft_cnr
+from fft_cnr.core import _GG_SIGMA_MAX_TO_LENGTH
 
 
 class TestFFTCNR:
@@ -196,6 +197,30 @@ class TestGeneralizedGaussianFit:
         fitted_p = result.diagnostics["gaussian_fit_params"]["shape"]
         assert abs(fitted_p - 3.0) < 1.0
 
+    def test_keeps_flat_top_at_shape_bound(self):
+        """A genuine flat-topped profile whose shape hits its bound is not refused."""
+        signal, _, _, _ = self._make_gen_gaussian_signal(
+            N=512, amplitude=20.0, sigma=40.0, p=12.0, seed=3
+        )
+        result = fft_cnr(signal, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert "gaussian_fit_rejected" not in result.diagnostics
+        assert result.diagnostics["gaussian_fit_params"]["shape"] == pytest.approx(10.0, abs=0.1)
+
+    @pytest.mark.parametrize("cnr", [1.0, 2.0])
+    @pytest.mark.parametrize("seed", [1, 2, 3, 5])
+    def test_keeps_valid_fit_near_cnr_one(self, cnr, seed):
+        """The degenerate-fit screen must not refuse a fit that tracks the peak
+        at CNR 1 to 2, where a refusal would bias the CNR of frames the fit is
+        meant to serve. Seeds are chosen so the fit centers on the true peak."""
+        signal, _, _, _ = self._make_gen_gaussian_signal(
+            N=241, amplitude=cnr, sigma=20.0, p=2.0, seed=seed
+        )
+        result = fft_cnr(signal, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert "gaussian_fit_rejected" not in result.diagnostics
+        assert abs(result.diagnostics["gaussian_fit_params"]["center"] - 120.0) < 20.0
+
 
 class TestPeakMethod:
     """Tests for the non-parametric peak amplitude estimation path."""
@@ -339,17 +364,18 @@ class TestEdgeCases:
         assert "gaussian_fit_rejected" not in result.diagnostics
 
     @pytest.mark.parametrize(
-        ("seed", "reason"),
+        "seed",
         [
             # Flat-topped model as wide as the record: amplitude and baseline
-            # cancel (unrefused: cnr ~1039, amplitude ~994, sigma at N).
-            (125, "amplitude_exceeds_data_range"),
+            # cancel (unrefused: cnr ~1039, amplitude ~994, sigma at N). The
+            # amplitude rule is checked first, so it names the refusal.
+            125,
             # Tail of a narrow feature centred outside the record (unrefused:
             # cnr ~30, amplitude ~32, center ~-3).
-            (108, "amplitude_exceeds_data_range"),
+            108,
         ],
     )
-    def test_generalized_gaussian_refuses_degenerate_fit(self, seed, reason):
+    def test_generalized_gaussian_refuses_degenerate_fit(self, seed):
         """A runaway fit on a CNR-0.3 frame falls back to the peak read."""
         grid = np.linspace(-6, 6, 241)
         clean = 0.3 * np.exp(-0.5 * grid**2)
@@ -357,7 +383,7 @@ class TestEdgeCases:
         result = fft_cnr(y, fit_model="generalized_gaussian")
         peak = fft_cnr(y, fit_model="peak")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
-        assert result.diagnostics["gaussian_fit_rejected"] == reason
+        assert result.diagnostics["gaussian_fit_rejected"] == "amplitude_exceeds_data_range"
         assert "gaussian_fit_params" not in result.diagnostics
         assert result.amplitude == pytest.approx(peak.amplitude)
         assert result.cnr == pytest.approx(peak.cnr)
@@ -367,23 +393,13 @@ class TestEdgeCases:
         """Width pinned at the record length is refused even with an in-range amplitude."""
         N = 241
         y = np.random.default_rng(0).normal(0, 1, N)
-        popt = np.array([1.0, 120.0, N - 0.0002, 0.0, 10.0])
+        sigma_max = _GG_SIGMA_MAX_TO_LENGTH * N
+        popt = np.array([1.0, 120.0, sigma_max - 0.0002, 0.0, 10.0])
         with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
             result = fft_cnr(y, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
         assert result.diagnostics["gaussian_fit_rejected"] == "sigma_at_upper_bound"
         assert "gaussian_fit_params" not in result.diagnostics
-
-    def test_generalized_gaussian_keeps_flat_top_at_shape_bound(self):
-        """A genuine flat-topped profile whose shape hits its bound is not refused."""
-        rng = np.random.default_rng(3)
-        N = 512
-        grid = np.arange(N, dtype=float)
-        clean = 20.0 * np.exp(-0.5 * np.abs((grid - N / 2) / 40.0) ** 12)
-        result = fft_cnr(clean + rng.normal(0, 1.0, N), fit_model="generalized_gaussian")
-        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
-        assert "gaussian_fit_rejected" not in result.diagnostics
-        assert result.diagnostics["gaussian_fit_params"]["shape"] == pytest.approx(10.0, abs=0.1)
 
     def test_custom_welch_params(self):
         """Custom Welch parameters should be used and reported."""
