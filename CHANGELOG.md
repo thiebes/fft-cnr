@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The source distribution lists its contents explicitly: the package, tests,
   docs, validation scripts, `README.md`, `LICENSE`, `CHANGELOG.md`, and
-  `CITATION.cff`. Repository-only files are no longer included (`assets/`,
+  `CITATION.cff`, plus `pyproject.toml` and `.gitignore`, which the build
+  backend always includes. Repository-only files are no longer included (`assets/`,
   `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `uv.lock`, `.github/`,
   `.readthedocs.yaml`, `.gitattributes`), nor are files that are ignored only
   locally. The wheel is unchanged.
