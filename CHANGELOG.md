@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `uv.lock`, `.github/`,
   `.readthedocs.yaml`, `.gitattributes`), nor are files that are ignored only
   locally. The wheel is unchanged.
-- The test workflow's token is restricted to read-only contents.
+- The test, docs, and compatibility workflow tokens are restricted to
+  read-only contents.
 
 ## [0.3.3] - 2026-10-20
 
