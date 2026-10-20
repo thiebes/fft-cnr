@@ -415,9 +415,8 @@ value, and the derived peak SNR tracks the true peak signal-to-noise ratio
 
 ## Citation
 
-If you use fft-cnr in published work, please cite it. The concept DOI below
-always resolves to the latest release; to cite the exact version you used, take
-that version's DOI from the Zenodo record and report the pinned version
+If you use fft-cnr in published work, please cite it with the concept DOI below,
+which always resolves to the latest release, and report the version you used
 (`pip install fft-cnr==0.3.3`).
 
 > Joseph J. Thiebes. fft-cnr: FFT-based contrast-to-noise ratio estimation from
