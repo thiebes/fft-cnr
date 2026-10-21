@@ -57,6 +57,21 @@ docs = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/fft_cnr"]
 
+[tool.hatch.build.targets.sdist]
+# Anchored to the project root: unanchored patterns match at any depth and
+# would pick up same-named files under locally ignored directories.
+include = [
+    "/src/fft_cnr",
+    "/tests",
+    "/docs",
+    "/scripts",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/CITATION.cff",
+]
+exclude = ["/docs/_build"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
