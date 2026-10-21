@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `diagnostics["gaussian_fit_rejected"]` is renamed
+  `diagnostics["gaussian_fit_rejection_reason"]`. The value is a string naming
+  the reason, and the old name read like the boolean flags beside it
+  (`lowfreq_dominated`, `amplitude_sign_ambiguous`). Code that reads the old
+  key must use the new name.
 - The source distribution lists its contents explicitly: the package, tests,
   docs, validation scripts, `README.md`, `LICENSE`, `CHANGELOG.md`, and
   `CITATION.cff`, plus `pyproject.toml` and `.gitignore`, which the build
@@ -25,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locally. The wheel is unchanged.
 - The test, docs, and compatibility workflow tokens are restricted to
   read-only contents.
+
+### Fixed
+
+- The generalized-Gaussian path also refuses a fit whose center is pinned at
+  its bound, half a profile length outside the data
+  (`gaussian_fit_rejection_reason == "center_at_bound"`). Such a fit describes
+  only a broad wing reaching into the profile, usually with the wrong sign, and
+  on noise-dominated profiles it could read a CNR near 10. A center just
+  outside the profile is still accepted, because a genuine feature can sit at
+  the edge of the data. In validation (Gaussian, heavy-tailed, flat-topped,
+  Gaussian-mixture, and Lorentzian profiles; N=241 and 512; CNR 0.1 to 20;
+  400 profiles per condition), the rule refused no fit within 50% of the true
+  amplitude.
 
 ## [0.3.3] - 2026-10-20
 
