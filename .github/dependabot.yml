@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions current for runtime deprecations and security
+  # fixes, and keeps the publish action's twine new enough for the pinned build
+  # backend's metadata.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A new release must age before it is proposed, so a release that is
+    # malicious from the start has time to be caught upstream.
+    cooldown:
+      default-days: 7
+    groups:
+      # Proposed on its own so the matching twine and packaging pins in
+      # test.yml can be updated in the same PR.
+      publish:
+        patterns: ["pypa/gh-action-pypi-publish"]
+      actions:
+        patterns: ["*"]
+        exclude-patterns: ["pypa/gh-action-pypi-publish"]

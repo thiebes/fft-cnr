@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CI job that builds the package on pull requests and checks it with the same
+  twine and packaging versions as the PyPI publish action.
+- Dependabot weekly updates for the SHA-pinned GitHub Actions, with a seven-day
+  cooldown and the publish action proposed on its own.
+
 ### Changed
 
 - `diagnostics["gaussian_fit_rejected"]` is renamed
@@ -14,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the reason, and the old name read like the boolean flags beside it
   (`lowfreq_dominated`, `amplitude_sign_ambiguous`). Code that reads the old
   key must use the new name.
+- The source distribution lists its contents explicitly: the package, tests,
+  docs, validation scripts, `README.md`, `LICENSE`, `CHANGELOG.md`, and
+  `CITATION.cff`, plus `pyproject.toml` and `.gitignore`, which the build
+  backend always includes. Repository-only files are no longer included (`assets/`,
+  `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `uv.lock`, `.github/`,
+  `.readthedocs.yaml`, `.gitattributes`), nor are files that are ignored only
+  locally. The wheel is unchanged.
+- The test, docs, and compatibility workflow tokens are restricted to
+  read-only contents.
 
 ### Fixed
 
