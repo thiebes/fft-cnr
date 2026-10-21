@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locally. The wheel is unchanged.
 - The test, docs, and compatibility workflow tokens are restricted to
   read-only contents.
+- The `validation` extra and the `validation` and `assets` dependency groups
+  install only on Python 3.11 and later. Their matplotlib dependency pulls in
+  Pillow, whose security fixes (13.0.0 and later) no longer support Python
+  3.10. The package itself still supports Python 3.10.
 
 ### Fixed
 
