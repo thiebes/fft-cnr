@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locally. The wheel is unchanged.
 - The test, docs, and compatibility workflow tokens are restricted to
   read-only contents.
+- The PyPI publish workflow builds in a separate job without the publishing
+  token and hands the distributions to the publish job as an artifact. The
+  build backend and its dependencies are pinned with hashes
+  (`.github/build-constraints.txt`), uv is pinned to a version with a known
+  checksum, the uv cache is off, checkout does not keep credentials, and the
+  workflow token is read-only except for the publish job's `id-token`.
 - The `validation` extra and the `validation` and `assets` dependency groups
   install only on Python 3.11 and later. Their matplotlib dependency pulls in
   Pillow, whose security fixes (13.0.0 and later) no longer support Python

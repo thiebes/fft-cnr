@@ -4,6 +4,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -12,21 +15,53 @@ jobs:
         python-version: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # uv is pinned to a version whose SHA-256 setup-uv carries in its known
+      # list, and the cache is off so a release run cannot restore a cache
+      # written by another workflow.
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.0"
+          enable-cache: false
       - run: uv python install ${{ matrix.python-version }}
       - run: uv sync --group dev
       - run: uv run pytest -v
 
-  publish:
+  # Build in a job without the OIDC token, so the build backend and its
+  # dependencies never run where the publish credential is available.
+  build:
     needs: test
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.0"
+          enable-cache: false
+      # The build backend and its dependencies are pinned with hashes; see
+      # .github/build-constraints.txt for how to regenerate it.
+      - run: uv build --build-constraints .github/build-constraints.txt --require-hashes
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     environment: pypi
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-      - run: uv build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
       # When bumping this action, update the twine and packaging pins in the
       # package job of test.yml to match its requirements/runtime.txt.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
