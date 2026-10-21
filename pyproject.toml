@@ -1,4 +1,6 @@
 [build-system]
+# The release build pins hatchling and its dependencies with hashes in
+# .github/build-constraints.txt; regenerate that file when changing this pin.
 requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
