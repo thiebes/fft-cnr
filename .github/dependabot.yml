@@ -16,6 +16,8 @@ updates:
       # test.yml can be updated in the same PR.
       publish:
         patterns: ["pypa/gh-action-pypi-publish"]
+      # When this bumps astral-sh/setup-uv, the uv `version` pinned on its
+      # steps can move up to the newest uv in that release's known checksums.
       actions:
         patterns: ["*"]
         exclude-patterns: ["pypa/gh-action-pypi-publish"]

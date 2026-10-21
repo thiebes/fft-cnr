@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install only on Python 3.11 and later. Their matplotlib dependency pulls in
   Pillow, whose security fixes (13.0.0 and later) no longer support Python
   3.10. The package itself still supports Python 3.10.
+- CI and the publish workflow install a pinned uv (0.13.0) that setup-uv
+  verifies against its known checksums; setup-uv v10 also disables its cache
+  on release runs.
 
 ### Fixed
 
