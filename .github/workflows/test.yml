@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.0"
       - run: uv python install ${{ matrix.python-version }}
       - run: uv sync --group dev
       - run: uv run pytest -v
@@ -34,8 +36,8 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.13.0"
-      - run: uv python install 3.13
-      - run: uv build --python 3.13 --build-constraints .github/build-constraints.txt --require-hashes
+      - run: uv python install 3.13.16
+      - run: uv build --python 3.13.16 --managed-python --build-constraints .github/build-constraints.txt --require-hashes
       # Same twine and packaging versions as the pinned PyPI publish action
       # (its requirements/runtime.txt), so a metadata version the publish step
       # would reject fails here first. Update both pins in the same PR that

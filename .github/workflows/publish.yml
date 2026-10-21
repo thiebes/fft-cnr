@@ -3,9 +3,10 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
-  # Dry run: test, build, and hand the artifact to a verify job that checks it
-  # without publishing. Run it before a release that follows a change to this
-  # workflow.
+  # Dry run of the test, build, and artifact handoff, without publishing. Run it
+  # on main before a release that follows a change to this workflow. It does
+  # not reach the pypi environment, the OIDC exchange, or the upload; the first
+  # release after such a change is what exercises those.
   workflow_dispatch:
 
 permissions:
@@ -45,21 +46,22 @@ jobs:
         with:
           version: "0.13.0"
           enable-cache: false
-      # Pin the interpreter that runs the build backend instead of using the
-      # runner image's Python; uv verifies the download against its built-in
-      # hashes.
-      - run: uv python install 3.13
+      # Pin the interpreter that runs the build backend to an exact uv-managed
+      # Python instead of the runner image's; uv verifies the download against
+      # its built-in hashes. Keep the version in step with test.yml.
+      - run: uv python install 3.13.16
       # The build backend and its dependencies are pinned with hashes; see
       # .github/build-constraints.txt for how to regenerate it.
-      - run: uv build --python 3.13 --build-constraints .github/build-constraints.txt --require-hashes
+      - run: uv build --python 3.13.16 --managed-python --build-constraints .github/build-constraints.txt --require-hashes
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
           if-no-files-found: error
 
-  # Dry-run counterpart of the publish job: the same artifact handoff, then the
-  # metadata check the publish action applies, with no token and no upload.
+  # Dry run only: receives the artifact the same way the publish job does and
+  # checks that it holds one wheel and one sdist. The metadata check runs in the
+  # package job of test.yml on every pull request.
   verify:
     needs: build
     if: github.event_name == 'workflow_dispatch'
@@ -69,13 +71,10 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: "0.13.0"
-          enable-cache: false
-      - run: ls -l dist/
-      # Same twine and packaging versions as the package job in test.yml.
-      - run: uvx --with packaging==26.2 twine==7.0.0 check --strict dist/*
+      - run: |
+          ls -l dist/
+          test "$(ls dist/*.whl | wc -l)" -eq 1
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 1
 
   publish:
     needs: build

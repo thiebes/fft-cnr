@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twine and packaging versions as the PyPI publish action.
 - Dependabot weekly updates for the SHA-pinned GitHub Actions, with a seven-day
   cooldown and the publish action proposed on its own.
+- A manually triggered run of the publish workflow tests, builds, and passes
+  the distributions between jobs without publishing.
 
 ### Changed
 
@@ -33,16 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The PyPI publish workflow builds in a separate job without the publishing
   token and hands the distributions to the publish job as an artifact. The
   build backend and its dependencies are pinned with hashes
-  (`.github/build-constraints.txt`), the build runs on a pinned Python, uv is
-  pinned to a version with a known checksum, the uv cache is off, checkout does
-  not keep credentials, and the workflow token is read-only except for the
-  publish job's `id-token`. A manually triggered dry run builds the
-  distributions, hands them to a verify job, and checks them without
-  publishing.
+  (`.github/build-constraints.txt`), the build runs on a pinned Python, the uv
+  cache is off throughout the workflow, checkout does not keep credentials, and
+  the workflow token is read-only except for the publish job's `id-token`.
 - The `validation` extra and the `validation` and `assets` dependency groups
   install only on Python 3.11 and later. Their matplotlib dependency pulls in
   Pillow, whose security fixes (13.0.0 and later) no longer support Python
   3.10. The package itself still supports Python 3.10.
+- CI and the publish workflow install a pinned uv (0.13.0) that setup-uv
+  verifies against its known checksums; setup-uv v10 also disables its cache
+  on release runs.
 
 ### Fixed
 
