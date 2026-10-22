@@ -527,20 +527,23 @@ _GG_CENTER_MIN_TO_LENGTH = -0.5
 _GG_CENTER_MAX_TO_LENGTH = 1.5
 # Tolerance, as a fraction of the profile length, for treating the fitted
 # center as pinned at one of its bounds. A center pinned there places the
-# feature half a profile length outside the data, so the fit describes only a
-# broad wing reaching into the profile, not a feature in it.
-_GG_CENTER_BOUND_RTOL = 1e-3
+# fitted feature half a profile length outside the data, where the data do not
+# constrain its amplitude: on a noise-dominated profile it is a broad wing,
+# often of the wrong sign; on a feature at the profile edge it is a flat top
+# reaching into the data.
+_GG_CENTER_BOUND_TOL_TO_LENGTH = 1e-3
 
 
 def _degenerate_gaussian_fit_reason(fit_params: dict, x: np.ndarray) -> str | None:
     """Name why a generalized-Gaussian fit is degenerate, or None if it is usable.
 
     Only fits that cannot describe a feature in the data are refused. Shape at
-    its bound and a center just outside the profile are deliberately not
-    tested: both occur on genuine flat-topped and low-CNR profiles, and
-    refusing them would bias the CNR in the regime the fit is meant to serve.
-    A center pinned at its own bound, half a profile length outside the data,
-    is refused.
+    its bound and a center outside the profile but short of its bound are
+    deliberately not tested: both occur on genuine flat-topped and low-CNR
+    profiles, and refusing them would bias the CNR in the regime the fit is
+    meant to serve. A center pinned at its own bound, half a profile length
+    outside the data, is refused. The conditions are tested in the order
+    amplitude, width, center, and only the first that applies is named.
     """
     if not fit_params:
         return None
@@ -550,10 +553,12 @@ def _degenerate_gaussian_fit_reason(fit_params: dict, x: np.ndarray) -> str | No
     sigma_max = _GG_SIGMA_MAX_TO_LENGTH * N
     if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * sigma_max:
         return "sigma_at_upper_bound"
-    center_tol = _GG_CENTER_BOUND_RTOL * N
+    center_tol = _GG_CENTER_BOUND_TOL_TO_LENGTH * N
+    center_min = _GG_CENTER_MIN_TO_LENGTH * N
+    center_max = _GG_CENTER_MAX_TO_LENGTH * N
     if (
-        fit_params["center"] <= _GG_CENTER_MIN_TO_LENGTH * N + center_tol
-        or fit_params["center"] >= _GG_CENTER_MAX_TO_LENGTH * N - center_tol
+        fit_params["center"] <= center_min + center_tol
+        or fit_params["center"] >= center_max - center_tol
     ):
         return "center_at_bound"
     return None
@@ -764,8 +769,8 @@ def fft_cnr(
         parameters (center, width, shape) in diagnostics. A fit that fails,
         or that is degenerate (fitted amplitude more than twice the data's
         peak-to-peak range, width pinned at the profile length, or center
-        pinned at its bound half a profile length outside the data), falls back
-        to the peak method; a refusal is named in
+        pinned at its bound, half a profile length outside the data), falls
+        back to the peak method; a refusal is named in
         ``diagnostics["gaussian_fit_rejection_reason"]``.
         Ignored when ``template`` is given.
     window : str
@@ -834,8 +839,8 @@ def fft_cnr(
         When ``fit_model="generalized_gaussian"`` refuses a degenerate fit, the
         diagnostics carry ``gaussian_fit_rejection_reason``, naming the reason:
         ``"amplitude_exceeds_data_range"``, ``"sigma_at_upper_bound"``, or
-        ``"center_at_bound"``. The
-        key is absent when the fit is kept or fails.
+        ``"center_at_bound"``. When several conditions apply, the first in
+        that order is named. The key is absent when the fit is kept or fails.
 
     Raises
     ------
@@ -917,7 +922,7 @@ def fft_cnr(
 
     # Amplitude estimation
     gfit_params: dict = {}
-    gfit_rejected: str | None = None
+    gfit_rejection_reason: str | None = None
     if template is not None:
         t = np.asarray(template, float).ravel()
         if t.size != N:
@@ -950,8 +955,8 @@ def fft_cnr(
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
         Amp, Amp_se, gfit_params = _fit_generalized_gaussian_amplitude(x_raw)
-        gfit_rejected = _degenerate_gaussian_fit_reason(gfit_params, x_raw)
-        if gfit_rejected is not None:
+        gfit_rejection_reason = _degenerate_gaussian_fit_reason(gfit_params, x_raw)
+        if gfit_rejection_reason is not None:
             gfit_params = {}
         if not gfit_params:
             amp_method = "generalized_gaussian_fit_fallback"
@@ -1023,8 +1028,8 @@ def fft_cnr(
         diags["roi"] = roi_bounds
     if gfit_params:
         diags["gaussian_fit_params"] = gfit_params
-    if gfit_rejected is not None:
-        diags["gaussian_fit_rejection_reason"] = gfit_rejected
+    if gfit_rejection_reason is not None:
+        diags["gaussian_fit_rejection_reason"] = gfit_rejection_reason
     if return_bandpassed_noise:
         diags["x_bp"] = d.x_bp
     diags.update(noise_model_diags)
