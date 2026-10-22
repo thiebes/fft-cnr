@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fft-cnr"
-version = "0.3.3"
+version = "0.4.0"
 description = "FFT-based contrast-to-noise ratio estimation from a single frame"
 readme = "README.md"
 license = "MIT"
@@ -45,9 +45,10 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
-# The validation and assets tooling requires Python 3.11+: matplotlib pulls in
-# Pillow, whose security fixes (13.0.0 and later) no longer support 3.10. The
-# package itself still supports 3.10.
+# The validation and assets tooling is marked for Python 3.11+, so on 3.10 these
+# groups install nothing: matplotlib pulls in Pillow, whose security fixes
+# (13.0.0 and later) no longer support 3.10. The package itself still supports
+# 3.10.
 validation = [
     "jupyter>=1.0; python_version >= '3.11'",
     "matplotlib>=3.7; python_version >= '3.11'",

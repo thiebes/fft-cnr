@@ -7,6 +7,7 @@ import pytest
 
 from fft_cnr import CNREstimate, NoiseModel, fft_cnr
 from fft_cnr.core import (
+    _GG_CENTER_BOUND_TOL_TO_LENGTH,
     _GG_CENTER_MAX_TO_LENGTH,
     _GG_CENTER_MIN_TO_LENGTH,
     _GG_SIGMA_MAX_TO_LENGTH,
@@ -225,22 +226,6 @@ class TestGeneralizedGaussianFit:
         assert "gaussian_fit_rejection_reason" not in result.diagnostics
         assert abs(result.diagnostics["gaussian_fit_params"]["center"] - 120.0) < 20.0
 
-    def test_refuses_fit_centered_at_bound(self):
-        """A CNR-0.3 frame whose fit pins its center at the lower bound, half a
-        profile outside the data, falls back to the peak read. Unrefused, the
-        fit reads a negative wing (amplitude about -10.8, fit CNR about 10)
-        under a positive peak; its amplitude is within twice the data range,
-        so only the center rule catches it."""
-        signal, _, _, _ = self._make_gen_gaussian_signal(
-            N=241, amplitude=0.3, sigma=20.0, p=2.0, seed=100036
-        )
-        result = fft_cnr(signal, fit_model="generalized_gaussian")
-        peak = fft_cnr(signal, fit_model="peak")
-        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
-        assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
-        assert result.cnr == pytest.approx(peak.cnr)
-        assert result.cnr < 5.0
-
 
 class TestPeakMethod:
     """Tests for the non-parametric peak amplitude estimation path."""
@@ -386,11 +371,11 @@ class TestEdgeCases:
     @pytest.mark.parametrize(
         "seed",
         [
-            # Flat-topped model as wide as the record: amplitude and baseline
+            # Flat-topped model as wide as the profile: amplitude and baseline
             # cancel (unrefused: cnr ~1039, amplitude ~994, sigma at N). The
             # amplitude rule is checked first, so it names the refusal.
             125,
-            # Tail of a narrow feature centred outside the record (unrefused:
+            # Tail of a narrow feature centered outside the profile (unrefused:
             # cnr ~30, amplitude ~32, center ~-3).
             108,
         ],
@@ -409,8 +394,28 @@ class TestEdgeCases:
         assert result.cnr == pytest.approx(peak.cnr)
         assert result.cnr < 5.0
 
+    def test_generalized_gaussian_refuses_center_at_bound_real_profile(self):
+        """A CNR-0.3 frame whose fit pins its center at the upper bound, half a
+        profile outside the data, falls back to the peak read. Unrefused, the
+        fit reads a negative wing (amplitude about -9.7, fit CNR about 10)
+        under a positive peak. Its amplitude is about 1.6 times the data range
+        and its width about 49 samples, both clear of the other two rules, so
+        only the center rule catches it."""
+        N = 241
+        x = np.arange(N, dtype=float)
+        clean = 0.3 * np.exp(-0.5 * ((x - (N - 1) / 2.0) / 20.0) ** 2)
+        y = clean + np.random.default_rng(2902).normal(0, 1, N)
+        result = fft_cnr(y, fit_model="generalized_gaussian")
+        peak = fft_cnr(y, fit_model="peak")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+        assert "gaussian_fit_params" not in result.diagnostics
+        assert result.amplitude == pytest.approx(peak.amplitude)
+        assert result.cnr == pytest.approx(peak.cnr)
+        assert result.cnr < 5.0
+
     def test_generalized_gaussian_refuses_sigma_at_upper_bound(self):
-        """Width pinned at the record length is refused even with an in-range amplitude."""
+        """Width pinned at the profile length is refused even with an in-range amplitude."""
         N = 241
         y = np.random.default_rng(0).normal(0, 1, N)
         sigma_max = _GG_SIGMA_MAX_TO_LENGTH * N
@@ -436,8 +441,8 @@ class TestEdgeCases:
         assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
         assert "gaussian_fit_params" not in result.diagnostics
 
-    def test_generalized_gaussian_keeps_center_just_outside_profile(self):
-        """A center outside the profile but clear of its bound is kept: a
+    def test_generalized_gaussian_keeps_center_outside_profile_short_of_bound(self):
+        """A center outside the profile but short of its bound is kept: a
         genuine feature can sit at the edge of the data."""
         N = 241
         y = np.random.default_rng(0).normal(0, 1, N)
@@ -446,6 +451,31 @@ class TestEdgeCases:
             result = fft_cnr(y, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
         assert "gaussian_fit_rejection_reason" not in result.diagnostics
+
+    @pytest.mark.parametrize("bound", ["min", "max"])
+    @pytest.mark.parametrize(
+        "tol_multiple, refused", [(0.5, True), (2.0, False)]
+    )
+    def test_generalized_gaussian_center_bound_tolerance(
+        self, bound, tol_multiple, refused
+    ):
+        """A center within the tolerance of either bound is refused; one at twice
+        the tolerance inside the bound is kept, which pins the tolerance."""
+        N = 241
+        y = np.random.default_rng(0).normal(0, 1, N)
+        tol = _GG_CENTER_BOUND_TOL_TO_LENGTH * N
+        if bound == "min":
+            center = _GG_CENTER_MIN_TO_LENGTH * N + tol_multiple * tol
+        else:
+            center = _GG_CENTER_MAX_TO_LENGTH * N - tol_multiple * tol
+        popt = np.array([1.0, center, 20.0, 0.0, 2.0])
+        with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        if refused:
+            assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+        else:
+            assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+            assert "gaussian_fit_rejection_reason" not in result.diagnostics
 
     def test_custom_welch_params(self):
         """Custom Welch parameters should be used and reported."""

@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-10-22
 
 ### Added
 
@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The source distribution lists its contents explicitly: the package, tests,
   docs, validation scripts, `README.md`, `LICENSE`, `CHANGELOG.md`, and
   `CITATION.cff`, plus `pyproject.toml` and `.gitignore`, which the build
-  backend always includes. Repository-only files are no longer included (`assets/`,
-  `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `uv.lock`, `.github/`,
+  backend always includes. Repository-only files are no longer included
+  (`assets/`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `uv.lock`, `.github/`,
   `.readthedocs.yaml`, `.gitattributes`), nor are files that are ignored only
   locally. The wheel is unchanged.
 - The test, docs, and compatibility workflow tokens are restricted to
@@ -50,14 +50,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The generalized-Gaussian path also refuses a fit whose center is pinned at
   its bound, half a profile length outside the data
-  (`gaussian_fit_rejection_reason == "center_at_bound"`). Such a fit describes
-  only a broad wing reaching into the profile, usually with the wrong sign, and
-  on noise-dominated profiles it could read a CNR near 10. A center just
-  outside the profile is still accepted, because a genuine feature can sit at
-  the edge of the data. In validation (Gaussian, heavy-tailed, flat-topped,
-  Gaussian-mixture, and Lorentzian profiles; N=241 and 512; CNR 0.1 to 20;
-  400 profiles per condition), the rule refused no fit within 50% of the true
-  amplitude.
+  (`gaussian_fit_rejection_reason == "center_at_bound"`), and falls back to the
+  peak method. Some fits kept in 0.3.3 therefore fall back in 0.4.0: on those
+  profiles `diagnostics["gaussian_fit_params"]` is absent and `cnr` changes.
+  Validation used Gaussian, flat-topped, and Lorentzian profiles of length 241
+  and 512 at CNR 0.3 to 30, with the feature centered, at the profile edge, or
+  outside the data (200 profiles per condition), plus a sweep of five shapes
+  with the feature centered (400 profiles per condition).
+  - For a feature centered in the profile, the rule acts only at CNR 1 and
+    below, on about 1% of fits or fewer. Every fit it refused there had the
+    wrong sign, a broad wing under the peak that could read a CNR near 10.
+  - For a feature whose peak sits at the profile edge, the rule also refuses
+    flat-topped fits of the correct sign: 5 to 18% of fits at CNR 1 to 10. At
+    CNR 3 to 10 the refused fits were off by a median of 30% or more, and the
+    peak-method fallback by 10 to 25%.
+  - For a feature whose peak lies outside the data, it refused up to about 4%
+    of fits (up to 12.5% for a Lorentzian at high CNR). Both the fit and the
+    fallback were then off by about 100%, because the peak is not in the data.
+
+  A center outside the profile but short of its bound, up to almost half a
+  profile length outside, is still accepted, because a genuine feature can sit
+  at the edge of the data. A runaway fit that meets none of the three
+  conditions is still reported: at CNR 0.3, at most 1% of profiles read a CNR
+  above 5, and such fits reach a fit CNR of about 12.
+
+### Documentation
+
+- README: the citation guidance asks for the concept DOI together with the
+  version used, instead of a per-release DOI.
 
 ## [0.3.3] - 2026-10-20
 
@@ -234,7 +254,8 @@ This release carries the citation metadata into the published artifact. Version
 - Initial release: FFT-based CNR estimation from single 1-D profiles, with an
   AIC-selected signal/noise frequency boundary and a 95% confidence interval.
 
-[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/thiebes/fft-cnr/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/thiebes/fft-cnr/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/thiebes/fft-cnr/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/thiebes/fft-cnr/compare/v0.3.0...v0.3.1
