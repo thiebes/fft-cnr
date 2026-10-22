@@ -146,16 +146,20 @@ Two alternatives are available:
   to flat-topped. Useful when fitted parameters (center, width, shape) are
   needed in addition to CNR. The fit can degenerate, most often on
   noise-dominated profiles, for example into a flat-topped model as wide as the
-  profile whose amplitude and baseline cancel. A fit whose amplitude exceeds
-  twice the data's peak-to-peak range, whose width is pinned at the profile
-  length, or whose center is pinned at its bound half a profile length outside
-  the data, is refused at any CNR, and the estimate falls back to the peak
-  method; `diagnostics["gaussian_fit_rejection_reason"]` names the reason, and
+  profile whose amplitude and baseline cancel. The fit is refused at any CNR if
+  its amplitude exceeds twice the data's peak-to-peak range, its width is
+  pinned at the profile length, or its center is pinned at its bound, half a
+  profile length outside the data. The estimate then falls back to the peak
+  method, and `diagnostics["gaussian_fit_rejection_reason"]` names the reason.
   `diagnostics["gaussian_fit_params"]` is then absent, as it is when the fit
-  fails to converge. The screen tests only these three conditions. A runaway
-  fit that meets none of them, such as a narrow fit centered just outside the
-  profile, is still reported, so treat a generalized-Gaussian CNR far above
-  the peak-method value on a noisy profile with caution.
+  does not converge. A feature whose peak sits at the edge of the profile can
+  also meet the center condition; there the peak-method fallback is usually
+  closer to the true amplitude than the refused fit. The screen tests only
+  these three conditions. A fit centered outside the profile but short of its
+  bound, up to almost half a profile length outside, is kept. A runaway fit
+  that meets none of the conditions is therefore still reported, so treat a
+  generalized-Gaussian CNR far above the peak-method value on a noisy profile
+  with caution.
 
 The `result.amplitude_snr` property reports the matched-filter signal-to-noise
 ratio (amplitude over its standard error). A larger value means the amplitude
