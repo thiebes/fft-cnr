@@ -140,6 +140,15 @@ Two alternatives are available:
   expected signal shape is available, a matched filter gives the most precise
   amplitude estimate and a calibrated standard error. This holds only when the
   template matches the true shape; a mismatched template biases the amplitude.
+  The template is mean-subtracted before the projection, so it is negative away
+  from the target, and any other feature in the window shifts the amplitude in
+  proportion to that feature's own amplitude (a same-sign neighbour lowers it).
+  For a Gaussian target at N=512, a resolved neighbour of equal height lowers
+  the amplitude by about 9%, and one three times as high by about 26%. Set
+  `roi` to explicit bounds that exclude the neighbour, including its tails: for
+  a neighbour 6 sigma or more away, a window of +/- 3 sigma around the target
+  removes the bias. A neighbour whose tail stays inside the window is not
+  removed this way, and the shorter window can make the bias larger.
 
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
