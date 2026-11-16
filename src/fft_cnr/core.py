@@ -80,7 +80,11 @@ class CNREstimate:
         ``cnr -/+ 1.96 * sqrt(amplitude_se**2 / noise_rms**2 +
         amplitude**2 * se_noise**2 / noise_rms**4)``, with ``se_noise`` the
         half-width of ``noise_ci95`` divided by 1.96. It treats the amplitude
-        and noise estimates as independent.
+        and noise estimates as independent. On the peak path it also assumes
+        the feature has decayed within the outer quarters of the profile,
+        where the baseline is read; a feature that reaches them, for example
+        at the profile edge, is read low and the interval does not cover that
+        bias.
     amplitude : float
         Estimated signal amplitude. Signed on the peak and generalized-Gaussian
         paths: negative for a downward (absorption / dark-contrast) feature.
@@ -95,8 +99,9 @@ class CNREstimate:
         signal-dependent noise. On the generalized-Gaussian path it comes from
         the fit covariance, which understates the scatter near CNR 2. The peak
         value is conditional on the read location, which moves under noise at
-        low CNR, so it feeds ``cnr_ci95`` but is not exposed through
-        ``amplitude_snr``.
+        low CNR, and at any CNR for a feature at the profile edge; it also
+        omits the baseline bias described under ``cnr_ci95``. It feeds
+        ``cnr_ci95`` but is not exposed through ``amplitude_snr``.
     noise_rms : float
         RMS noise estimated from high-frequency spectral region.
     noise_ci95 : tuple[float, float]
@@ -1078,14 +1083,20 @@ def fft_cnr(
                 "(constant template); the matched filter is undefined."
             )
         Amp = float(np.sum(xw * tw) / denom)
-        # Exact standard error of the projection under white noise of level
-        # sigma: var(Amp) = sigma**2 * sum(w**2 * tw**2) / denom**2, which
-        # reduces to the textbook sigma / ||t|| when the window is flat. With
-        # per-sample variances v it is sum(w**2 * tw**2 * v) / denom**2.
+        # Exact standard error of the projection. The data are demeaned, so
+        # Amp is linear in the raw profile with weights w * tw minus their
+        # mean. Under white noise of level sigma, var(Amp) = sigma**2 *
+        # sum(weights**2) / denom**2, which reduces to the textbook
+        # sigma / ||t|| when the window is flat. With per-sample variances v
+        # it is sum(weights**2 * v) / denom**2. Leaving out the mean of the
+        # weights would overstate the error, by several percent for a feature
+        # at the profile edge and by more for one centered outside the data.
+        weights = w * tw
+        weights = weights - np.mean(weights)
         if variance is None:
-            Amp_se = float(sigma * np.sqrt(np.sum((w * tw) ** 2)) / denom)
+            Amp_se = float(sigma * np.sqrt(np.sum(weights**2)) / denom)
         else:
-            Amp_se = float(np.sqrt(np.sum((w * tw) ** 2 * variance)) / denom)
+            Amp_se = float(np.sqrt(np.sum(weights**2 * variance)) / denom)
         amp_method = "matched_filter"
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
