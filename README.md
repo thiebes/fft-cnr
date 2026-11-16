@@ -388,7 +388,7 @@ Gaussian's tails and the amplitude reads about 8.5% low even without noise.
 
 Records much shorter than 128 points work when the feature is narrow enough to
 leave some baseline at the edges. For a Gaussian feature in a record spanning
-+/-4 widths (N=28, 40, and 52; 2000 trials per condition,
++/-4 standard deviations (N=28, 40, and 52; 2000 trials per condition,
 `scripts/validate_interval_coverage.py --lengths 28 40 52 --width-to-length 0.125`),
 the median CNR ratio from CNR=5 to 100 at N=40 and 52 is 1.00--1.01 on the
 matched filter, 1.01--1.04 on the generalized Gaussian fit, and 0.98--1.02 on
@@ -413,8 +413,9 @@ contains the true noise level in 93 to 95% of trials for N from 64 to 1024, and
 in 94 to 96% for the short records described under Profile length (92% at N=28
 and CNR=100). From CNR=5 the CNR interval on those short records covers 0.92 to
 0.97 on every method. The exception is a feature narrow enough to put its own
-power above the signal/noise boundary: at N=64 a feature 3.1 samples wide reads
-the noise 1.44 times high at CNR=100, and the noise interval covers 0.36. The
+power above the signal/noise boundary: at N=64 a Gaussian feature with
+sigma=3.1 samples (FWHM about 7.4) reads the noise 1.44 times high at CNR=100,
+and the noise interval covers 0.36. The
 CNR interval combines the amplitude standard error and the noise interval as
 independent terms; its coverage and median width (relative to the true CNR) are:
 

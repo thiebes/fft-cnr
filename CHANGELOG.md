@@ -79,9 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - On a short record, the noise estimate no longer counts the taper's edge ramps
   as noise. The Tukey taper was applied to the mean-subtracted profile. On a
-  record spanning +/-4 widths of a localized feature the mean sits about 0.31
-  of the peak above the edges, and the taper ramps that offset to zero over
-  N/8 samples, which puts power above the signal/noise boundary. That leaked
+  record spanning +/-4 standard deviations of a Gaussian feature the mean sits
+  about 0.31 of the peak above the edges, and the taper ramps that offset to
+  zero over N/8 samples, which puts power above the signal/noise boundary. That leaked
   power is fixed while the noise falls, so `noise_rms` read high and `cnr` low
   as the CNR rose: at N = 28, 40, and 52 a CNR of 100 read as about 23, 44, and
   78, and the CNR interval covered 0.00, 0.12, and 0.50. The noise path now
@@ -96,11 +96,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on pure noise at N = 128 to 1024, `noise_rms` moved by at most 0.24% on any
   profile, with a median change of about 1e-5. With `roi="auto"`, whose window
   is itself a short record, the same leak was present and the correction is
-  larger: for a Gaussian of width 10 at N = 512 and CNR 100 the median noise
+  larger: for a Gaussian of standard deviation 10 samples at N = 512 and CNR
+  100 the median noise
   level fell from 1.10 to 1.00 times the true value. A feature narrow enough
   to put its own power above the boundary keeps that separate leak, and it can
   read slightly higher, because the pedestal ramp no longer partly cancels it:
-  for a feature 3.1 samples wide at N = 64 and CNR 100, the noise level reads
+  for a Gaussian of standard deviation 3.1 samples (full width at half maximum
+  about 7.4) at N = 64 and CNR 100, the noise level reads
   1.44 instead of 1.41 times the true value. The Hann and
   untapered windows are unaffected, because a Hann ramp spans the whole record
   and an untapered offset is pure DC. With `estimate_noise_model=True` the

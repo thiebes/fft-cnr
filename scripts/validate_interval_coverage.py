@@ -48,7 +48,7 @@ Usage:
     uv run python scripts/validate_interval_coverage.py --trials 200   # quick
     uv run python scripts/validate_interval_coverage.py --checks 1 3
     uv run python scripts/validate_interval_coverage.py --checks 1 2 --lengths 28 40 52 \
-        --width-to-length 0.125   # short records spanning +/-4 feature widths
+        --width-to-length 0.125   # short records spanning +/-4 standard deviations
 """
 
 import argparse
@@ -234,8 +234,9 @@ def check_noise_interval(n_trials, lengths=None, width_to_length=WIDTH_TO_LENGTH
     cnr_values = [0, 5, 20, 100]
     print("=" * 100)
     print("Check 1: noise_ci95 coverage of the true noise level (nominal 0.95)")
-    print(f"white Gaussian noise, Gaussian feature of width {width_to_length:.4f} N, "
-          f"peak path, {n_trials} trials per cell; CNR 0 is noise alone")
+    print(f"white Gaussian noise, Gaussian feature of standard deviation "
+          f"{width_to_length:.4f} N, peak path, {n_trials} trials per cell; "
+          f"CNR 0 is noise alone")
     print("=" * 100)
     header = (f"{'N':>5} {'CNR':>4} {'med s/true':>10} {'rel sd':>7} {'implied':>8}"
               + "".join(f" {'nu ' + r:>9}" for r in RULES)
@@ -284,8 +285,8 @@ def check_cnr_interval(n_trials, lengths=None, width_to_length=WIDTH_TO_LENGTH):
     print("Check 2: cnr_ci95 coverage of the true CNR (nominal 0.95), relative width")
     print("(median full width / true CNR), and calibration ratios (mean reported")
     print("standard error / empirical standard deviation) of the amplitude (A), the")
-    print("noise level (s), and the CNR. White Gaussian noise, Gaussian feature of width")
-    print(f"{width_to_length:.4f} N, {n_trials} trials per cell.")
+    print("noise level (s), and the CNR. White Gaussian noise, Gaussian feature of standard")
+    print(f"deviation {width_to_length:.4f} N, {n_trials} trials per cell.")
     print("med CNR and med s are the median estimates over the true values.")
     print("=" * 124)
     print(f"{'N':>5} {'method':<21} {'CNR':>4}" + _CNR_COLUMNS)
@@ -329,9 +330,9 @@ def check_shot_noise(n_trials):
     N, width, background, bl_cnr = 512, 20.0, 10.0, 20.0
     amplitude, references = _shot_references(N, width, background, bl_cnr)
     print("=" * 124)
-    print("Check 3: Poisson shot noise, Gaussian peak of width 20 on a background of")
-    print(f"10 counts, background-limited CNR 20, N = 512, {n_trials} trials. Reference")
-    print(f"noise levels: root mean rate {references['mean']:.3f} (CNR "
+    print("Check 3: Poisson shot noise, Gaussian peak of standard deviation 20 on a")
+    print(f"background of 10 counts, background-limited CNR 20, N = 512, {n_trials} trials.")
+    print(f"Reference noise levels: root mean rate {references['mean']:.3f} (CNR "
           f"{amplitude / references['mean']:.2f}) and taper-weighted root mean rate")
     print(f"{references['taper']:.3f} (CNR {amplitude / references['taper']:.2f}); "
           "columns as in check 2, one row per reference. 'model' runs with")
@@ -374,8 +375,9 @@ def check_shot_grid(n_trials):
     bl_cnr_values = [2.0, 5.0, 20.0, 50.0]
     print("=" * 124)
     print("Check 4: Poisson shot noise over background level and background-limited CNR,")
-    print(f"Gaussian peak of width 20, N = 512, estimate_noise_model=True, {n_trials} trials")
-    print("per cell. taper/mean: ratio of the taper-weighted to the plain root mean rate.")
+    print("Gaussian peak of standard deviation 20, N = 512, estimate_noise_model=True,")
+    print(f"{n_trials} trials per cell. taper/mean: ratio of the taper-weighted to the plain")
+    print("root mean rate.")
     print("applied: fraction of trials whose intervals use the photon-transfer variance;")
     print("skipped: fraction where the detector declined to fit (signal range under 3")
     print("noise RMS); the rest tested not significant. Coverage of the CNR interval")
@@ -417,8 +419,9 @@ def main():
     parser.add_argument("--lengths", type=int, nargs="+", default=None,
                         help="profile lengths for checks 1 and 2 (overrides the defaults)")
     parser.add_argument("--width-to-length", type=float, default=WIDTH_TO_LENGTH,
-                        help="feature width over profile length for checks 1 and 2; "
-                             "0.125 gives a record spanning +/-4 feature widths")
+                        help="Gaussian standard deviation over profile length for "
+                             "checks 1 and 2; 0.125 gives a record spanning +/-4 "
+                             "standard deviations")
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1),
                         help="worker processes (1 runs serially)")
     args = parser.parse_args()

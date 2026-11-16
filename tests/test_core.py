@@ -689,8 +689,9 @@ class TestIntervalCalibration:
 
 
 class TestShortRecordNoise:
-    """A short record around a localized feature, here +/-4 widths, has a mean
-    well above its edges. Tapered relative to the mean, that offset leaves a
+    """A short record around a localized feature, here +/-4 standard
+    deviations of a Gaussian, has a mean well above its edges. Tapered
+    relative to the mean, that offset leaves a
     pedestal whose Tukey ramps, only N/8 samples long, carry power above the
     cutoff. The noise path removes the edge level instead, so the pedestal
     does not read as noise. Before that change the noise-free leak was 0.042,
