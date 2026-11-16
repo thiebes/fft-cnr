@@ -250,6 +250,11 @@ def _noise_band_dof(
     kept fraction for a taper whose transform is narrow relative to the kept
     band. Unequal variances lower it.
 
+    The form ignores the level subtracted before the taper (the record mean,
+    or on the Tukey path the edge level), a rank-one change that moves the
+    degrees of freedom by at most about 1% from N = 28 and under 0.3% from
+    N = 128.
+
     Parameters
     ----------
     w : np.ndarray
@@ -296,7 +301,7 @@ class _SpectralDecomposition(NamedTuple):
     x_mean: float  # subtracted mean (physical offset)
     w: np.ndarray  # taper window
     w_rms: float
-    X: np.ndarray  # unitary rFFT of the tapered signal
+    X: np.ndarray  # unitary rFFT of the tapered signal (noise path)
     Pxx_full: np.ndarray  # Welch PSD interpolated to the full rFFT grid
     welch_nperseg: int  # resolved segment length
     welch_noverlap: int  # resolved overlap
@@ -325,6 +330,7 @@ def _spectral_decomposition(
 
     # Detrend and taper
     x_mean = float(np.mean(x))
+    x_raw = x
     x = x - x_mean
     if window == "tukey":
         w = tukey(N, alpha=tukey_alpha)
@@ -332,7 +338,21 @@ def _spectral_decomposition(
         w = get_window("hann", N, fftbins=True)
     else:
         w = np.ones(N)
-    xw = x * w
+    # The noise path tapers the profile relative to its edge level, the mean
+    # of the samples under the Tukey ramps. Relative to the record mean, a
+    # localized feature leaves a pedestal that the taper ramps down over
+    # tukey_alpha * N / 2 samples; on a short record that ramp has power
+    # above the cutoff, which would be counted as noise. A Hann ramp spans
+    # the record and confines the pedestal to the lowest bins, and an
+    # untapered pedestal is pure DC, so only the Tukey path needs this.
+    # The demeaned x, which feeds the Welch PSD, the low-pass reconstruction,
+    # and the matched filter, is unchanged.
+    if window == "tukey":
+        ramp = max(1, int(np.ceil(tukey_alpha * N / 2)))
+        edge_level = float(np.mean(np.concatenate((x_raw[:ramp], x_raw[-ramp:]))))
+        xw = (x_raw - edge_level) * w
+    else:
+        xw = x * w
     w_rms = np.sqrt(np.mean(w**2))
 
     # Unitary rFFT
@@ -864,6 +884,10 @@ def fft_cnr(
         Tapering window: ``"tukey"``, ``"hann"``, or ``"none"``.
     tukey_alpha : float
         Shape parameter for the Tukey window (0 = rectangular, 1 = Hann).
+        The noise estimate tapers the profile relative to the mean of the
+        ``max(1, ceil(tukey_alpha * N / 2))`` samples at each end (the samples
+        under the taper ramps), so that a feature's offset above the edges is
+        not ramped into the noise band.
     welch_nperseg : int or None
         Segment length for Welch PSD estimation. Defaults to max(16, N//8).
         With 50% overlap this heuristic produces approximately 15 Welch

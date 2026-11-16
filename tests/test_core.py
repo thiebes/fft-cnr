@@ -503,8 +503,8 @@ class TestGridConsistencyRegression:
         noisy, _ = self._fixed_signal()
         result = fft_cnr(noisy)
         assert result.cutoff_index == 24
-        assert result.cnr == pytest.approx(19.9876, rel=1e-4)
-        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        assert result.cnr == pytest.approx(19.9901, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.01189, rel=1e-4)
         assert result.amplitude == pytest.approx(20.2278, rel=1e-4)
 
     def test_noise_interval_values(self):
@@ -513,8 +513,8 @@ class TestGridConsistencyRegression:
         noisy, _ = self._fixed_signal()
         result = fft_cnr(noisy)
         assert result.diagnostics["dof"] == pytest.approx(403.960, rel=1e-5)
-        assert result.noise_ci95[0] == pytest.approx(0.946789, rel=1e-5)
-        assert result.noise_ci95[1] == pytest.approx(1.086974, rel=1e-5)
+        assert result.noise_ci95[0] == pytest.approx(0.946668, rel=1e-5)
+        assert result.noise_ci95[1] == pytest.approx(1.086836, rel=1e-5)
 
     def test_matched_filter_cutoff_matches_peak(self):
         """Knee detection is independent of the amplitude method, so the
@@ -526,21 +526,21 @@ class TestGridConsistencyRegression:
     def test_matched_filter_values(self):
         noisy, clean = self._fixed_signal()
         result = fft_cnr(noisy, template=clean)
-        assert result.cnr == pytest.approx(0.97641, rel=1e-4)
+        assert result.cnr == pytest.approx(0.97653, rel=1e-4)
         assert result.amplitude == pytest.approx(0.98814, rel=1e-4)
-        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.01189, rel=1e-4)
         # Pin the noise-only-whitened standard error: a regression here would
         # signal the signal-contaminated whitening has crept back in.
-        assert result.amplitude_se == pytest.approx(0.0084777, rel=1e-3)
+        assert result.amplitude_se == pytest.approx(0.0084766, rel=1e-3)
 
     def test_generalized_gaussian_values(self):
         noisy, _ = self._fixed_signal()
         result = fft_cnr(noisy, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
         assert result.cutoff_index == 24
-        assert result.cnr == pytest.approx(19.7954, rel=1e-4)
+        assert result.cnr == pytest.approx(19.7979, rel=1e-4)
         assert result.amplitude == pytest.approx(20.0333, rel=1e-4)
-        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.01189, rel=1e-4)
 
     def test_noise_rms_independent_of_amplitude_method(self):
         """The noise path never branches on the amplitude method, so all
@@ -686,6 +686,43 @@ class TestIntervalCalibration:
         assert modeled.diagnostics["interval_noise"] == "white"
         assert modeled.noise_ci95 == default.noise_ci95
         assert modeled.cnr_ci95 == default.cnr_ci95
+
+
+class TestShortRecordNoise:
+    """A short record around a localized feature, here +/-4 widths, has a mean
+    well above its edges. Tapered relative to the mean, that offset leaves a
+    pedestal whose Tukey ramps, only N/8 samples long, carry power above the
+    cutoff. The noise path removes the edge level instead, so the pedestal
+    does not read as noise. Before that change the noise-free leak was 0.042,
+    0.020, and 0.0096 of the peak at N = 28, 40, and 52."""
+
+    @staticmethod
+    def _profile(N, amplitude, seed=None):
+        grid = np.arange(N, dtype=float)
+        clean = amplitude * np.exp(-0.5 * ((grid - (N - 1) / 2.0) / (N / 8.0)) ** 2)
+        if seed is None:
+            return clean
+        return clean + np.random.default_rng(seed).normal(0, 1.0, N)
+
+    @pytest.mark.parametrize("N", [28, 40, 52])
+    def test_noise_free_feature_leaves_little_noise(self, N):
+        result = fft_cnr(self._profile(N, 1.0))
+        assert result.noise_rms < 0.006
+
+    @pytest.mark.parametrize("N", [28, 40])
+    def test_noise_level_unbiased_at_high_cnr(self, N):
+        """At CNR 50 the median noise estimate was 2.3 and 1.4 times the true
+        level at N = 28 and 40."""
+        sigmas = [fft_cnr(self._profile(N, 50.0, seed)).noise_rms for seed in range(200)]
+        assert 0.93 <= np.median(sigmas) <= 1.07
+
+    def test_cnr_interval_coverage_at_high_cnr(self):
+        """At N = 40 and CNR 100 the interval covered about 0.11 of the time."""
+        hits = 0
+        for seed in range(TestIntervalCalibration.N_TRIALS):
+            lo, hi = fft_cnr(self._profile(40, 100.0, seed)).cnr_ci95
+            hits += lo <= 100.0 <= hi
+        assert 0.91 <= hits / TestIntervalCalibration.N_TRIALS <= 0.99
 
 
 class TestAmplitudeSNR:
