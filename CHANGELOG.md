@@ -97,7 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile, with a median change of about 1e-5. With `roi="auto"`, whose window
   is itself a short record, the same leak was present and the correction is
   larger: for a Gaussian of width 10 at N = 512 and CNR 100 the median noise
-  level fell from 1.10 to 1.00 times the true value. The Hann and
+  level fell from 1.10 to 1.00 times the true value. A feature narrow enough
+  to put its own power above the boundary keeps that separate leak, and it can
+  read slightly higher, because the pedestal ramp no longer partly cancels it:
+  for a feature 3.1 samples wide at N = 64 and CNR 100, the noise level reads
+  1.44 instead of 1.41 times the true value. The Hann and
   untapered windows are unaffected, because a Hann ramp spans the whole record
   and an untapered offset is pure DC. With `estimate_noise_model=True` the
   significance null draws its noise at `noise_rms`, so
