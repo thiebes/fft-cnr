@@ -10,7 +10,7 @@ authors:
     orcid: "https://orcid.org/0000-0002-7456-3952"
     affiliation: "Universidad Autónoma de Madrid"
 version: 0.4.0
-date-released: "2026-10-22"
+date-released: "2026-11-16"
 license: MIT
 repository-code: "https://github.com/thiebes/fft-cnr"
 url: "https://github.com/thiebes/fft-cnr"
