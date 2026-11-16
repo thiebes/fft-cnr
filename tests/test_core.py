@@ -562,9 +562,11 @@ class TestGridConsistencyRegression:
         assert result.cnr == pytest.approx(0.97653, rel=1e-4)
         assert result.amplitude == pytest.approx(0.98814, rel=1e-4)
         assert result.noise_rms == pytest.approx(1.01189, rel=1e-4)
-        # Pin the noise-only-whitened standard error: a regression here would
-        # signal the signal-contaminated whitening has crept back in.
-        assert result.amplitude_se == pytest.approx(0.0084766, rel=1e-3)
+        # Pin the exact white-noise standard error of the projection (weights
+        # with their mean removed). A regression here would signal that the
+        # signal-contaminated spectral whitening, or the weights' mean, has
+        # crept back in.
+        assert result.amplitude_se == pytest.approx(0.0084535, rel=1e-3)
 
     def test_generalized_gaussian_values(self):
         noisy, _ = self._fixed_signal()
@@ -599,13 +601,16 @@ class TestIntervalCalibration:
     N_TRIALS = 400  # binomial standard error at 0.95 is 0.011
 
     @staticmethod
-    def _explicit_dof(N, kc_full, w):
+    def _explicit_dof(N, kc_full, w, variance=None):
+        """tr(P U)**2 / tr((P U)**2) with an explicit projector P and
+        U = W V W."""
         eye = np.eye(N)
         X = np.fft.rfft(eye, axis=0, norm="ortho")
         X[:kc_full] = 0.0
         P = np.fft.irfft(X, n=N, axis=0, norm="ortho")
-        Q = np.diag(w) @ P.T @ P @ np.diag(w)
-        return np.trace(Q) ** 2 / np.trace(Q @ Q)
+        v = np.ones(N) if variance is None else variance
+        PU = P @ np.diag(w**2 * v)
+        return np.trace(PU) ** 2 / np.trace(PU @ PU)
 
     @staticmethod
     def _gaussian_profile(N, amplitude, seed):
@@ -614,14 +619,18 @@ class TestIntervalCalibration:
         clean = amplitude * np.exp(-0.5 * ((grid - (N - 1) / 2.0) / width) ** 2)
         return clean + np.random.default_rng(seed).normal(0, 1.0, N), clean
 
+    @pytest.mark.parametrize("N", [64, 65])
     @pytest.mark.parametrize("kc_full", [1, 4, 8, 16])
-    def test_dof_matches_explicit_quadratic_form(self, kc_full):
+    @pytest.mark.parametrize("unequal", [False, True])
+    def test_dof_matches_explicit_quadratic_form(self, N, kc_full, unequal):
         from scipy.signal.windows import tukey
 
-        N = 64
         w = tukey(N, alpha=0.25)
-        assert _noise_band_dof(w, kc_full) == pytest.approx(
-            self._explicit_dof(N, kc_full, w), rel=1e-10
+        variance = (
+            np.random.default_rng(N + kc_full).uniform(0.2, 5.0, N) if unequal else None
+        )
+        assert _noise_band_dof(w, kc_full, variance) == pytest.approx(
+            self._explicit_dof(N, kc_full, w, variance), rel=1e-10
         )
 
     def test_flat_window_dof_counts_kept_components(self):
@@ -658,6 +667,25 @@ class TestIntervalCalibration:
         if cnr == 20.0:
             # About 0.14 of the CNR at N = 512, where the noise term dominates.
             assert np.median(widths) < 0.2
+
+    def test_matched_filter_se_for_a_feature_centered_outside_the_data(self):
+        """The data are demeaned, so the projection's weights in the raw
+        profile have their mean removed. Leaving it in overstated the standard
+        error by about 37% for this template, whose center lies a quarter of
+        the profile before its first sample."""
+        N = 512
+        grid = np.arange(N, dtype=float)
+        shape = np.exp(-0.5 * ((grid + N / 4) / (N / 8)) ** 2)
+        amps, ses, hits = [], [], 0
+        for seed in range(self.N_TRIALS):
+            noisy = 10.0 * shape + np.random.default_rng(seed).normal(0, 1.0, N)
+            result = fft_cnr(noisy, template=shape)
+            amps.append(result.amplitude)
+            ses.append(result.amplitude_se)
+            lo, hi = result.cnr_ci95
+            hits += lo <= 10.0 <= hi
+        assert 0.9 <= np.mean(ses) / np.std(amps) <= 1.1
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
 
     def test_peak_amplitude_se_is_the_exact_read_se(self):
         """The peak read is (L x)[i] - mean(edges of x), with L the low-pass

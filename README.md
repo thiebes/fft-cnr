@@ -114,9 +114,11 @@ can be separated.
    CNR = amplitude / noise RMS.
 6. The noise level gets a chi-squared 95% confidence interval whose degrees of
    freedom are those of the estimate itself: the tapered, band-limited power of
-   the whole profile, which for white noise is close to the number of samples
-   times the fraction of the band kept. A 95% confidence interval on CNR is then
-   computed by first-order error propagation (the delta method), combining the
+   the whole profile. For white noise and the default taper this is about 0.87
+   times the number of samples times the fraction of the band kept (the factor
+   is `mean(w**2)**2 / mean(w**4)` for the taper `w`). A 95% confidence
+   interval on CNR is then computed by first-order error propagation (the
+   delta method), combining the
    amplitude standard error and the noise interval as independent terms.
 
 The method works best when the signal occupies low frequencies and the noise is
@@ -471,6 +473,21 @@ peak method at CNR=2 the maximum of the noisy reconstruction biases the CNR
 10--19% high, which no standard error can absorb; below CNR=3 the matched
 filter is the better choice. On the generalized-Gaussian method at CNR=2 the
 fit covariance understates the amplitude scatter.
+
+These figures are for a feature centered in the profile. On the peak method the
+interval also assumes that the feature has decayed within the outer quarters of
+the profile, where the baseline is read (see
+[Amplitude estimation](#amplitude-estimation)). A feature that reaches them is
+read low, and the interval, whose width reflects only the noise, does not cover
+that bias. For a Gaussian with sigma=30 samples centered on the first sample of
+a 512-point profile, the peak method reads the CNR at 0.84 of the true value and
+its interval covers 0.04; for the same feature centered at 0.15 of the profile
+length, 0.72 and 0.00 (1000 trials each). A centered Gaussian with sigma=60
+samples (3.6 FWHM in the profile) covers 0.90 to 0.92 at CNR=20 to 50. The
+matched filter does not use this baseline and covers 0.94 to 0.95 in all three
+cases, so use it, or
+`roi` bounds that leave margin on both sides of the feature, when the feature
+is near the edge of the profile.
 
 Under shot noise the default intervals assume one noise level and are too
 narrow: with a background of 10 counts and CNR 20, the CNR interval covers 0.84

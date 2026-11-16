@@ -28,10 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose effective degrees of freedom are computed exactly for white noise
   (`tr(WPW)**2 / tr((WPW)**2)`, with `W` the taper and `P` the kept band). They
   came from the Welch segment count, which only locates the signal/noise
-  boundary, and were 10 to 30 times too few for records of 128 samples or more:
-  both intervals were three to four times too wide and covered 0.99 to 1.00
-  against a nominal 0.95. On white noise the noise interval now covers 0.93 to
-  0.95, and at CNR 20 the CNR interval spans about 0.14 to 0.21 of the CNR
+  boundary, and were 4 to 30 times too few for records of 128 to 1024 samples
+  (more so the longer the record). The noise interval was 2 to 6 times too
+  wide, the CNR interval at CNR 20 about 3 to 4 times (N = 256 and 512), and
+  both covered 0.99 to 1.00 against a nominal 0.95. On white noise the noise
+  interval now covers 0.93 to 0.95, and at CNR 20 the CNR interval spans about
+  0.14 to 0.21 of the CNR
   (N = 512 and 256) instead of about 0.58. `diagnostics["dof"]` is a float.
   This change alone leaves `cnr`, `noise_rms`, and `amplitude` unchanged.
 - The peak path's `amplitude_se` is the exact standard error of the read given
@@ -40,7 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sqrt(cutoff_index)`, which understated the scatter by up to a factor of two.
   The oversized noise term had hidden this; with the noise interval corrected,
   the peak-path CNR interval covers 0.94 to 0.95 from CNR 5 and 0.91 to 0.93 at
-  CNR 2, where the upward bias of the maximum read remains.
+  CNR 2, where the upward bias of the maximum read remains. These figures are
+  for a feature centered in the profile. A feature that reaches the outer
+  quarters of the profile, where the peak path reads its baseline, is read low,
+  and the narrower interval no longer hides that bias: for a Gaussian of
+  standard deviation 30 samples centered on the first sample of 512, the CNR
+  reads 0.84 of the true value and the interval covers 0.04, where 0.3.3
+  covered 0.95 only because its interval was about four times too wide. The
+  matched filter covers 0.94 to 0.95 there.
 - With `estimate_noise_model=True`, when the detector finds signal-dependent
   noise, the fitted photon-transfer variance replaces the white-noise forms in
   the noise degrees of freedom and in `amplitude_se` on the peak and
@@ -77,6 +86,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The matched filter's `amplitude_se` is now the exact standard error of the
+  projection. The data are demeaned before the projection, so its weights in
+  the raw profile have their mean removed; the error was computed with the
+  mean left in, which overstated it by about 0.3% for a narrow centered
+  feature, 1 to 2% for a centered feature that fills the record, about 4% at
+  the profile edge, and over 30% for a template centered outside the data. The
+  amplitude is unchanged; `amplitude_se`, `amplitude_snr`, and `cnr_ci95` on
+  the template path are slightly smaller.
 - On a short record, the noise estimate no longer counts the taper's edge ramps
   as noise. The Tukey taper was applied to the mean-subtracted profile. On a
   record spanning +/-4 standard deviations of a Gaussian feature the mean sits
@@ -89,11 +106,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   samples under the taper ramps. The amplitude, the Welch spectrum, the cutoff,
   and the low-pass reconstruction are unchanged. On those records the median
   noise level now reads within 2% of its expected value, except 4% high at
-  N = 28 and CNR 100, and the CNR interval covers 0.92 to 0.97 from CNR 5 on
-  every amplitude path. The change applies at every length, so `noise_rms` and
-  `cnr` are no longer identical to 0.3.3 from N = 128 either: on Gaussian,
-  generalized-Gaussian, Voigt, and narrow-peak profiles at N = 256 and 512 and
-  on pure noise at N = 128 to 1024, `noise_rms` moved by at most 0.24% on any
+  N = 28 and CNR 100, and for a centered feature the CNR interval covers 0.92
+  to 0.97 from CNR 5 on every amplitude path. The change applies at every
+  length, so `noise_rms` and `cnr` are no longer identical to 0.3.3 from
+  N = 128 either: on Gaussian, generalized-Gaussian, Voigt, and narrow-peak
+  profiles at N = 256 and 512 and on pure noise at N = 128 to 1024,
+  `noise_rms` moved by at most 0.24% on any
   profile, with a median change of about 1e-5. With `roi="auto"`, whose window
   is itself a short record, the same leak was present and the correction is
   larger: for a Gaussian of standard deviation 10 samples at N = 512 and CNR
