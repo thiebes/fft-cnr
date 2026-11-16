@@ -47,7 +47,8 @@ Usage:
     uv run python scripts/validate_interval_coverage.py
     uv run python scripts/validate_interval_coverage.py --trials 200   # quick
     uv run python scripts/validate_interval_coverage.py --checks 1 3
-    uv run python scripts/validate_interval_coverage.py --checks 1 2 --lengths 28 40 52
+    uv run python scripts/validate_interval_coverage.py --checks 1 2 --lengths 28 40 52 \
+        --width-to-length 0.125   # short records spanning +/-4 feature widths
 """
 
 import argparse
@@ -139,13 +140,13 @@ def _collect(profiles, method, noise_model=False):
 
 
 def _profiles(spec, seeds):
-    """Profiles of one cell. spec is ("white", (N, cnr)) or
+    """Profiles of one cell. spec is ("white", (N, cnr, width)) or
     ("shot", (N, background, bl_cnr, width)); each seed gives one draw."""
     kind, params = spec
     if kind == "white":
-        N, true_cnr = params
+        N, true_cnr, width = params
         for seed in seeds:
-            yield _gaussian(N, float(true_cnr), WIDTH_TO_LENGTH * N, 1.0, seed)
+            yield _gaussian(N, float(true_cnr), width, 1.0, seed)
         return
     N, background, bl_cnr, width = params
     grid = np.arange(N, dtype=float)
@@ -228,12 +229,12 @@ def _progress(done, total):
         sys.stderr.write("\n")
 
 
-def check_noise_interval(n_trials, lengths=None):
+def check_noise_interval(n_trials, lengths=None, width_to_length=WIDTH_TO_LENGTH):
     lengths = lengths or [64, 128, 256, 512, 1024]
     cnr_values = [0, 5, 20, 100]
     print("=" * 100)
     print("Check 1: noise_ci95 coverage of the true noise level (nominal 0.95)")
-    print(f"white Gaussian noise, Gaussian feature of width {WIDTH_TO_LENGTH:.4f} N, "
+    print(f"white Gaussian noise, Gaussian feature of width {width_to_length:.4f} N, "
           f"peak path, {n_trials} trials per cell; CNR 0 is noise alone")
     print("=" * 100)
     header = (f"{'N':>5} {'CNR':>4} {'med s/true':>10} {'rel sd':>7} {'implied':>8}"
@@ -244,7 +245,7 @@ def check_noise_interval(n_trials, lengths=None):
     lines = []
     for N in lengths:
         for true_cnr in cnr_values:
-            cell = _run_cell(("white", (N, true_cnr)), "peak", n_trials)
+            cell = _run_cell(("white", (N, true_cnr, width_to_length * N)), "peak", n_trials)
             s = _summarize(cell, 1.0, float(true_cnr))
             lines.append(
                 f"{N:>5} {true_cnr:>4} {s['sigma_ratio']:>10.3f} {s['sigma_rsd']:>7.4f} "
@@ -276,14 +277,15 @@ _CNR_COLUMNS = (
 )
 
 
-def check_cnr_interval(n_trials, lengths=None):
+def check_cnr_interval(n_trials, lengths=None, width_to_length=WIDTH_TO_LENGTH):
     lengths = lengths or [256, 512]
     cnr_values = [2, 5, 10, 20, 100]
     print("=" * 124)
     print("Check 2: cnr_ci95 coverage of the true CNR (nominal 0.95), relative width")
     print("(median full width / true CNR), and calibration ratios (mean reported")
     print("standard error / empirical standard deviation) of the amplitude (A), the")
-    print(f"noise level (s), and the CNR. White Gaussian noise, {n_trials} trials per cell.")
+    print("noise level (s), and the CNR. White Gaussian noise, Gaussian feature of width")
+    print(f"{width_to_length:.4f} N, {n_trials} trials per cell.")
     print("med CNR and med s are the median estimates over the true values.")
     print("=" * 124)
     print(f"{'N':>5} {'method':<21} {'CNR':>4}" + _CNR_COLUMNS)
@@ -292,7 +294,8 @@ def check_cnr_interval(n_trials, lengths=None):
     for N in lengths:
         for method in METHODS:
             for true_cnr in cnr_values:
-                cell = _run_cell(("white", (N, true_cnr)), method, n_trials)
+                cell = _run_cell(("white", (N, true_cnr, width_to_length * N)), method,
+                                 n_trials)
                 s = _summarize(cell, 1.0, float(true_cnr))
                 lines.append((f"{N:>5} {method:<21} {true_cnr:>4}", s))
                 done += 1
@@ -413,6 +416,9 @@ def main():
                         choices=[1, 2, 3, 4], help="which checks to run")
     parser.add_argument("--lengths", type=int, nargs="+", default=None,
                         help="profile lengths for checks 1 and 2 (overrides the defaults)")
+    parser.add_argument("--width-to-length", type=float, default=WIDTH_TO_LENGTH,
+                        help="feature width over profile length for checks 1 and 2; "
+                             "0.125 gives a record spanning +/-4 feature widths")
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1),
                         help="worker processes (1 runs serially)")
     args = parser.parse_args()
@@ -420,9 +426,9 @@ def main():
     if args.workers > 1:
         _POOL = ProcessPoolExecutor(max_workers=args.workers)
     if 1 in args.checks:
-        check_noise_interval(args.trials, args.lengths)
+        check_noise_interval(args.trials, args.lengths, args.width_to_length)
     if 2 in args.checks:
-        check_cnr_interval(args.trials, args.lengths)
+        check_cnr_interval(args.trials, args.lengths, args.width_to_length)
     if 3 in args.checks:
         check_shot_noise(args.trials)
     if 4 in args.checks:
