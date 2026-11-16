@@ -10,6 +10,7 @@ from fft_cnr.core import (
     _GG_CENTER_MAX_TO_LENGTH,
     _GG_CENTER_MIN_TO_LENGTH,
     _GG_SIGMA_MAX_TO_LENGTH,
+    _noise_band_dof,
 )
 
 
@@ -42,11 +43,12 @@ class TestFFTCNR:
         x = rng.normal(0, 1.0, 256)
         result = fft_cnr(x)
         expected_keys = {
-            "N", "window_rms", "dof",
+            "N", "window_rms", "dof", "interval_noise",
             "welch_nperseg", "welch_noverlap", "kept_bins",
         }
         assert expected_keys.issubset(result.diagnostics.keys())
         assert result.diagnostics["N"] == 256
+        assert result.diagnostics["interval_noise"] == "white"
 
     def test_rejects_short_input(self):
         with pytest.raises(ValueError, match="too short"):
@@ -477,8 +479,8 @@ class TestEdgeCases:
 class TestGridConsistencyRegression:
     """Pin numerical outputs on a fixed signal to catch silent regressions.
 
-    The estimation pipeline bridges two frequency grids: knee detection and
-    the noise CI run on the coarse Welch PSD grid, while noise extraction and
+    The estimation pipeline bridges two frequency grids: knee detection runs
+    on the coarse Welch PSD grid, while noise extraction, its CI, and the
     amplitude run on the full rFFT grid. The Welch PSD is interpolated to the
     full grid and the knee index is separately scaled across grids. A mismatch
     in those conversions would shift the signal/noise boundary and bias the
@@ -504,6 +506,15 @@ class TestGridConsistencyRegression:
         assert result.cnr == pytest.approx(19.9876, rel=1e-4)
         assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
         assert result.amplitude == pytest.approx(20.2278, rel=1e-4)
+
+    def test_noise_interval_values(self):
+        """Pin the noise-interval degrees of freedom and bounds, which come
+        from the full-record estimate and not from the Welch segment count."""
+        noisy, _ = self._fixed_signal()
+        result = fft_cnr(noisy)
+        assert result.diagnostics["dof"] == pytest.approx(403.960, rel=1e-5)
+        assert result.noise_ci95[0] == pytest.approx(0.946789, rel=1e-5)
+        assert result.noise_ci95[1] == pytest.approx(1.086974, rel=1e-5)
 
     def test_matched_filter_cutoff_matches_peak(self):
         """Knee detection is independent of the amplitude method, so the
@@ -541,6 +552,140 @@ class TestGridConsistencyRegression:
             fft_cnr(noisy, fit_model="generalized_gaussian").noise_rms,
         }
         assert len(rms_values) == 1
+
+
+class TestIntervalCalibration:
+    """The noise CI takes the degrees of freedom of the estimate itself.
+
+    sigma**2 is the quadratic form x' W P W x / N of the tapered, band-limited
+    profile, so for white noise its chi-squared degrees of freedom are
+    tr(W P W)**2 / tr((W P W)**2), not twice the Welch segment count. The
+    coverage tests are reduced versions of scripts/validate_interval_coverage.py.
+    """
+
+    N_TRIALS = 400  # binomial standard error at 0.95 is 0.011
+
+    @staticmethod
+    def _explicit_dof(N, kc_full, w):
+        eye = np.eye(N)
+        X = np.fft.rfft(eye, axis=0, norm="ortho")
+        X[:kc_full] = 0.0
+        P = np.fft.irfft(X, n=N, axis=0, norm="ortho")
+        Q = np.diag(w) @ P.T @ P @ np.diag(w)
+        return np.trace(Q) ** 2 / np.trace(Q @ Q)
+
+    @staticmethod
+    def _gaussian_profile(N, amplitude, seed):
+        grid = np.arange(N, dtype=float)
+        width = 25.0 * N / 512.0
+        clean = amplitude * np.exp(-0.5 * ((grid - (N - 1) / 2.0) / width) ** 2)
+        return clean + np.random.default_rng(seed).normal(0, 1.0, N), clean
+
+    @pytest.mark.parametrize("kc_full", [1, 4, 8, 16])
+    def test_dof_matches_explicit_quadratic_form(self, kc_full):
+        from scipy.signal.windows import tukey
+
+        N = 64
+        w = tukey(N, alpha=0.25)
+        assert _noise_band_dof(w, kc_full) == pytest.approx(
+            self._explicit_dof(N, kc_full, w), rel=1e-10
+        )
+
+    def test_flat_window_dof_counts_kept_components(self):
+        """With no taper the degrees of freedom are the kept real components."""
+        N, kc_full = 128, 10
+        assert _noise_band_dof(np.ones(N), kc_full) == pytest.approx(N - (2 * kc_full - 1))
+
+    def test_dof_is_not_the_welch_segment_count(self):
+        """15 Welch segments at N = 512 would give at most 30."""
+        noisy, _ = self._gaussian_profile(512, 20.0, 0)
+        result = fft_cnr(noisy)
+        assert isinstance(result.diagnostics["dof"], float)
+        assert result.diagnostics["dof"] > 300
+
+    @pytest.mark.parametrize(("N", "amplitude"), [(128, 0.0), (512, 0.0), (512, 20.0)])
+    def test_noise_interval_coverage_white_noise(self, N, amplitude):
+        hits = 0
+        for seed in range(self.N_TRIALS):
+            noisy, _ = self._gaussian_profile(N, amplitude, seed)
+            lo, hi = fft_cnr(noisy).noise_ci95
+            hits += lo <= 1.0 <= hi
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
+
+    @pytest.mark.parametrize("cnr", [2.0, 20.0])
+    def test_matched_filter_cnr_interval_coverage(self, cnr):
+        hits, widths = 0, []
+        for seed in range(self.N_TRIALS):
+            noisy, clean = self._gaussian_profile(512, cnr, seed)
+            # Unit-peak template, so the amplitude is the peak height.
+            lo, hi = fft_cnr(noisy, template=clean / np.max(clean)).cnr_ci95
+            hits += lo <= cnr <= hi
+            widths.append((hi - lo) / cnr)
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
+        if cnr == 20.0:
+            # About 0.14 of the CNR at N = 512, where the noise term dominates.
+            assert np.median(widths) < 0.2
+
+    def test_peak_amplitude_se_is_the_exact_read_se(self):
+        """The peak read is (L x)[i] - mean(edges of x), with L the low-pass
+        projector, so given i its white-noise standard error is
+        sigma * ||L e_i - b||. Rebuild it from an explicit L."""
+        noisy, _ = self._gaussian_profile(256, 10.0, 3)
+        result = fft_cnr(noisy)
+        N, kc = noisy.size, result.cutoff_index
+        X = np.fft.rfft(np.eye(N), axis=0, norm="ortho")
+        X[kc:] = 0.0
+        L = np.fft.irfft(X, n=N, axis=0, norm="ortho")
+        margin = N // 4
+        b = np.zeros(N)
+        b[:margin] = b[-margin:] = 1.0 / (2 * margin)
+        dev = L @ noisy - b @ noisy
+        i = int(np.argmax(np.abs(dev)))
+        assert result.amplitude == pytest.approx(dev[i], rel=1e-10)
+        expected = result.noise_rms * np.linalg.norm(L[:, i] - b)
+        assert result.amplitude_se == pytest.approx(expected, rel=1e-10)
+
+    @pytest.mark.parametrize("cnr", [5.0, 20.0])
+    def test_peak_cnr_interval_coverage(self, cnr):
+        hits = 0
+        for seed in range(self.N_TRIALS):
+            noisy, _ = self._gaussian_profile(512, cnr, seed)
+            lo, hi = fft_cnr(noisy).cnr_ci95
+            hits += lo <= cnr <= hi
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
+
+    @staticmethod
+    def _poisson_profile(seed, background=10.0, bl_cnr=20.0, N=512, width=20.0):
+        grid = np.arange(N, dtype=float)
+        shape = np.exp(-0.5 * ((grid - (N - 1) / 2.0) / width) ** 2)
+        rate = background + bl_cnr * np.sqrt(background) * shape
+        return np.random.default_rng(seed).poisson(rate).astype(float), shape
+
+    def test_signal_dependent_noise_uses_the_fitted_variance(self):
+        """Under shot noise the detector fires and the intervals switch to the
+        photon-transfer variance: the template weights the peak, where the
+        variance is largest, so the amplitude standard error grows, and
+        unequal variances lower the noise degrees of freedom."""
+        noisy, shape = self._poisson_profile(0)
+        default = fft_cnr(noisy, template=shape)
+        modeled = fft_cnr(noisy, template=shape, estimate_noise_model=True)
+        assert default.diagnostics["interval_noise"] == "white"
+        assert modeled.noise_model.signal_dependent is True
+        assert modeled.diagnostics["interval_noise"] == "signal_dependent"
+        assert modeled.amplitude == default.amplitude
+        assert modeled.noise_rms == default.noise_rms
+        assert modeled.amplitude_se > 1.3 * default.amplitude_se
+        assert modeled.diagnostics["dof"] < default.diagnostics["dof"]
+
+    def test_white_noise_with_noise_model_keeps_white_intervals(self):
+        """When the gain is not significant the intervals are the default ones."""
+        noisy, clean = self._gaussian_profile(512, 20.0, 1)
+        default = fft_cnr(noisy)
+        modeled = fft_cnr(noisy, estimate_noise_model=True)
+        assert modeled.noise_model.signal_dependent is False
+        assert modeled.diagnostics["interval_noise"] == "white"
+        assert modeled.noise_ci95 == default.noise_ci95
+        assert modeled.cnr_ci95 == default.cnr_ci95
 
 
 class TestAmplitudeSNR:
