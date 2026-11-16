@@ -15,9 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cooldown and the publish action proposed on its own.
 - A manually triggered run of the publish workflow tests, builds, and passes
   the distributions between jobs without publishing.
+- `diagnostics["interval_noise"]`: `"white"`, or `"signal_dependent"` when the
+  intervals use the variance fitted by `estimate_noise_model`.
+- `scripts/validate_interval_coverage.py`: Monte Carlo coverage, width, and
+  standard-error calibration of `noise_ci95` and `cnr_ci95` per amplitude path,
+  under white and shot noise.
 
 ### Changed
 
+- `noise_ci95`, and with it `cnr_ci95`, takes its degrees of freedom from the
+  noise estimate itself: the tapered, band-limited power of the full record,
+  whose effective degrees of freedom are computed exactly for white noise
+  (`tr(WPW)**2 / tr((WPW)**2)`, with `W` the taper and `P` the kept band). They
+  came from the Welch segment count, which only locates the signal/noise
+  boundary, and were 10 to 30 times too few for records of 128 samples or more:
+  both intervals were three to four times too wide and covered 0.99 to 1.00
+  against a nominal 0.95. On white noise the noise interval now covers 0.93 to
+  0.95, and at CNR 20 the CNR interval spans about 0.14 to 0.21 of the CNR
+  (N = 512 and 256) instead of about 0.58. `diagnostics["dof"]` is a float.
+  The point estimates `cnr`, `noise_rms`, and `amplitude` are unchanged.
+- The peak path's `amplitude_se` is the exact standard error of the read given
+  its location, `noise_rms * ||L e_i - b||` (the low-pass reconstruction at the
+  peak minus the edge baseline), replacing the proxy `noise_rms /
+  sqrt(cutoff_index)`, which understated the scatter by up to a factor of two.
+  The oversized noise term had hidden this; with the noise interval corrected,
+  the peak-path CNR interval covers 0.94 to 0.95 from CNR 5 and 0.91 to 0.93 at
+  CNR 2, where the upward bias of the maximum read remains.
+- With `estimate_noise_model=True`, when the detector finds signal-dependent
+  noise, the fitted photon-transfer variance replaces the white-noise forms in
+  the noise degrees of freedom and in `amplitude_se` on the peak and
+  matched-filter paths. Under shot noise (background 10 counts, CNR 20) the
+  CNR interval then covers 0.93 to 0.95; the default, white-noise intervals
+  cover 0.80 to 0.84 there.
 - `diagnostics["gaussian_fit_rejected"]` is renamed
   `diagnostics["gaussian_fit_rejection_reason"]`. The value is a string naming
   the reason, and the old name read like the boolean flags beside it
