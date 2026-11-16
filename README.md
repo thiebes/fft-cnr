@@ -174,6 +174,41 @@ result = fft_cnr(noisy, fit_model="generalized_gaussian")
 print(result.diagnostics.get("gaussian_fit_params"))  # absent on fallback
 ```
 
+### Kinetic traces
+
+To follow a feature's amplitude across a series of profiles, such as pump-probe
+spectra at successive delays, use the matched filter with a template at the
+feature's known position and width, and read the signed `amplitude`.
+
+The peak method reads the largest excursion of the smoothed profile, of either
+sign. Once the feature has decayed into the noise, that excursion is noise. The
+signed `amplitude` then averages zero over many profiles, but it scatters by
+about 1.7 noise standard deviations, against 0.10 for the matched filter. While
+the feature is weak but still present (about 0.5 to 3 noise standard
+deviations), the peak method reads high. The magnitude of the peak amplitude,
+`cnr * noise_rms`, averages about 1.6 noise standard deviations on a profile
+with no feature, so a trace built from `cnr` stops decaying at a false floor.
+The generalized Gaussian fit follows a strong decaying feature, but it reads a
+weak long-lived component short.
+
+These statements come from a simulation of a Gaussian band (standard deviation
+about 77 points in a 1024-point spectrum) that decays over 81 delays in white
+noise, with 200 delay series per condition and exponential fits to each trace.
+The initial CNR is the band amplitude at the first delay over the noise level.
+The weak long-lived component has 0.2 of the initial amplitude and ten times
+the fast lifetime.
+
+| Amplitude read from | Single-exponential lifetime, initial CNR 10 / 20 | Long-lived lifetime, initial CNR 10 / 20 |
+| ------------------------- | ------------------------- | ------------------------- |
+| Matched filter | within 0.1% | within 0.6% |
+| Peak method, `amplitude` | 6.7% / 2.4% long | 71% / 56% long |
+| Generalized Gaussian fit | 3.2% / 0.8% short | 46% / 35% short |
+
+A single-exponential fit with a constant offset to the magnitude trace returns
+a false offset of 15% of the initial amplitude at an initial CNR of 10 and 7%
+at 20. On profiles where the band has decayed, the generalized Gaussian fit
+falls back to the peak method in 5% to 7% of cases.
+
 ## Noise model detection
 
 The CNR above treats the noise as one number, which is correct when the noise
