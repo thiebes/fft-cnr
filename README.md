@@ -403,7 +403,7 @@ independent terms; its coverage and median width (relative to the true CNR) are:
 | Matched filter | 0.95 | 0.95 | 0.95 | 0.21 / 0.14 |
 
 The reported standard errors match the trial-to-trial scatter: their ratio is
-0.98 to 0.99 for the noise level on every method, and 0.9 to 1.06 for the
+0.98 to 0.99 for the noise level on every method, and 0.91 to 1.05 for the
 amplitude on the peak and matched-filter methods. Two limits remain. On the
 peak method at CNR=2 the maximum of the noisy reconstruction biases the CNR
 10--19% high, which no standard error can absorb; below CNR=3 the matched
