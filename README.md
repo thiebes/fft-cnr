@@ -90,7 +90,11 @@ can be separated.
 
 1. The input profile is mean-subtracted and tapered with a window function (a
    tapered cosine, or Tukey, window by default) to suppress edge artifacts in
-   the Fourier transform.
+   the Fourier transform. For the noise estimate, the Tukey taper is applied
+   relative to the profile's edge level (the mean of the samples under the
+   taper ramps) instead of its mean. On a short record around a localized
+   feature the mean sits well above the edges, and the taper would turn that
+   offset into short ramps whose power reads as noise.
 2. The power spectrum is estimated by averaging the transforms of overlapping
    segments, which is smoother than a single transform (the averaged-segment, or
    Welch, method). This smoothed spectrum is used only to locate the
@@ -117,8 +121,9 @@ can be separated.
 
 The method works best when the signal occupies low frequencies and the noise is
 broadband (approximately white). The hard minimum length is 16 points (shorter
-inputs raise `ValueError`); reliable knee detection needs more, with measurable
-bias below roughly 128 points (see Accuracy). Signals with strong high-frequency
+inputs raise `ValueError`). Reliable results need more, and how many more
+depends on how much of the record the feature fills (see Profile length under
+Accuracy). Signals with strong high-frequency
 content that overlaps the noise band will also bias the CNR estimate.
 
 ## Amplitude estimation
@@ -381,6 +386,18 @@ Gaussian's tails and the amplitude reads about 8.5% low even without noise.
 | 256 | 1.03 | 1.00 | 1.00 |
 | 512 | 1.01 | 1.01 | 1.00 |
 
+Records much shorter than 128 points work when the feature is narrow enough to
+leave some baseline at the edges. For a Gaussian feature in a record spanning
++/-4 widths (N=28, 40, and 52; 2000 trials per condition,
+`scripts/validate_interval_coverage.py --lengths 28 40 52 --width-to-length 0.125`),
+the median CNR ratio from CNR=5 to 100 at N=40 and 52 is 1.00--1.01 on the
+matched filter, 1.01--1.04 on the generalized Gaussian fit, and 0.98--1.02 on
+the peak method. At N=28 and CNR=100 the coarse cutoff leaves some of the
+feature's own power in the noise band, so the noise level reads 4% high, and
+the CNR reads 0.95 (matched filter), 0.96 (generalized Gaussian), and 0.92
+(peak, whose amplitude also reads a few percent low on short records) of the
+true value.
+
 ### Precision
 
 Trial-to-trial scatter (relative standard deviation) scales as roughly
@@ -392,7 +409,10 @@ method, CNR=5). Providing a matched template reduces scatter at low CNR.
 Coverage of the 95% intervals was measured on white Gaussian noise with a
 Gaussian feature (2000 trials per condition,
 `scripts/validate_interval_coverage.py`). The noise interval `noise_ci95`
-contains the true noise level in 93 to 95% of trials for N from 64 to 1024. The
+contains the true noise level in 93 to 95% of trials for N from 64 to 1024, and
+in 94 to 96% for the short records described under Profile length (92% at N=28
+and CNR=100). From CNR=5 the CNR interval on those short records covers 0.92 to
+0.97 on every method. The
 CNR interval combines the amplitude standard error and the noise interval as
 independent terms; its coverage and median width (relative to the true CNR) are:
 
