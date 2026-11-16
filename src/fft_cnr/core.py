@@ -529,8 +529,8 @@ _GG_CENTER_MAX_TO_LENGTH = 1.5
 # center as pinned at one of its bounds. A center pinned there places the
 # fitted feature half a profile length outside the data, where the data do not
 # constrain its amplitude: on a noise-dominated profile it is a broad wing,
-# often of the wrong sign; on a feature at the profile edge it is a flat top
-# reaching into the data.
+# often of the wrong sign; on a feature at the profile edge it is usually a
+# fit of the correct sign whose peak lies beyond the edge.
 _GG_CENTER_BOUND_TOL_TO_LENGTH = 1e-3
 
 

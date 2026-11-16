@@ -52,27 +52,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its bound, half a profile length outside the data
   (`gaussian_fit_rejection_reason == "center_at_bound"`), and falls back to the
   peak method. Some fits kept in 0.3.3 therefore fall back in 0.4.0: on those
-  profiles `diagnostics["gaussian_fit_params"]` is absent and `cnr` changes.
-  Validation used Gaussian, flat-topped, and Lorentzian profiles of length 241
-  and 512 at CNR 0.3 to 30, with the feature centered, at the profile edge, or
-  outside the data (200 profiles per condition), plus a sweep of five shapes
-  with the feature centered (400 profiles per condition).
-  - For a feature centered in the profile, the rule acts only at CNR 1 and
-    below, on about 1% of fits or fewer. Every fit it refused there had the
-    wrong sign, a broad wing under the peak that could read a CNR near 10.
-  - For a feature whose peak sits at the profile edge, the rule also refuses
-    flat-topped fits of the correct sign: 5 to 18% of fits at CNR 1 to 10. At
-    CNR 3 to 10 the refused fits were off by a median of 30% or more, and the
-    peak-method fallback by 10 to 25%.
-  - For a feature whose peak lies outside the data, it refused up to about 4%
-    of fits (up to 12.5% for a Lorentzian at high CNR). Both the fit and the
-    fallback were then off by about 100%, because the peak is not in the data.
-
-  A center outside the profile but short of its bound, up to almost half a
+  profiles `diagnostics["gaussian_fit_params"]` is absent and `cnr` changes. A
+  center outside the profile but short of its bound, up to almost half a
   profile length outside, is still accepted, because a genuine feature can sit
   at the edge of the data. A runaway fit that meets none of the three
-  conditions is still reported: at CNR 0.3, at most 1% of profiles read a CNR
-  above 5, and such fits reach a fit CNR of about 12.
+  conditions is still reported. In validation, at most 1% of profiles at CNR
+  0.3 read a CNR above 5, and the runaway fits that were kept reached a fit
+  CNR of up to 12.5 at a true CNR of 1.5 or below.
+- Validation of the center rule, for a feature inside the profile. It used
+  five shapes with the feature centered (profile lengths 241 and 512, CNR 0.1
+  to 20, 400 profiles per condition), and Gaussian, flat-topped, and
+  Lorentzian features centered or a tenth of the profile length from the edge
+  (CNR 0.3 to 30, 200 profiles per condition). For a centered feature, the
+  rule acted only at CNR 3 and below, on about 1% of fits or fewer. The
+  refused fits whose sign was examined all had the wrong sign: a negative wing
+  under a positive peak, which could read a CNR of up to about 13. For a
+  feature a tenth of the profile length from the edge, it refused up to 2.5%
+  of fits, only at CNR 1 and below, with either sign.
+- Validation of the center rule, for a feature at the profile edge or outside
+  the data. It used the same three shapes and two profile lengths, with the
+  peak at the first sample, a quarter of the profile length before it, or a
+  fifth of the profile length after the end (CNR 0.3 to 30, 200 profiles per
+  condition). With the peak at the profile edge, the rule refused up to 18% of
+  fits at CNR 1 to 10 (up to 3.5% for a flat-topped feature), mostly fits of
+  the correct sign. At CNR 3 to 10 the refused fits were off by a median of 30%
+  or more, and the peak-method fallback by 10 to 25%. At CNR 1 both reads were
+  poor. With the peak outside the data, it refused at most 1.5% of fits for
+  Gaussian and flat-topped features, and up to 12.5% for a Lorentzian at CNR
+  10 to 30. In those Lorentzian cases both the fit and the fallback were off by
+  about 75 to 115%, because the peak is not in the data. At lower CNR the few
+  refused fits varied widely.
 
 ### Documentation
 

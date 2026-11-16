@@ -153,8 +153,9 @@ Two alternatives are available:
   method, and `diagnostics["gaussian_fit_rejection_reason"]` names the reason.
   `diagnostics["gaussian_fit_params"]` is then absent, as it is when the fit
   does not converge. A feature whose peak sits at the edge of the profile can
-  also meet the center condition; there the peak-method fallback is usually
-  closer to the true amplitude than the refused fit. The screen tests only
+  also meet the center condition. In validation at CNR 3 and above, the
+  peak-method fallback was closer to the true amplitude there than the refused
+  fit. The screen tests only
   these three conditions. A fit centered outside the profile but short of its
   bound, up to almost half a profile length outside, is kept. A runaway fit
   that meets none of the conditions is therefore still reported, so treat a
