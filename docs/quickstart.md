@@ -46,6 +46,15 @@ result = fft_cnr(noisy, fit_model="generalized_gaussian")
 print(result.diagnostics.get("gaussian_fit_params"))  # absent on fallback
 ```
 
+To follow a feature's amplitude across a series of profiles, such as pump-probe
+spectra at successive delays, use the matched filter with a template at the
+feature's known position and width, and read the signed `amplitude`. Once the
+feature has decayed into the noise, the peak method reads a noise excursion of
+either sign, and the magnitude behind `cnr` averages about 1.6 noise standard
+deviations, so a trace built from `cnr` stops decaying at a false floor. The
+[README](https://github.com/thiebes/fft-cnr#kinetic-traces) gives the measured
+errors in fitted lifetimes for each amplitude method.
+
 ## Noise model detection
 
 Setting `estimate_noise_model=True` tests whether the noise grows with the

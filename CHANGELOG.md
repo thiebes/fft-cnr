@@ -146,6 +146,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README: the citation guidance asks for the concept DOI together with the
   version used, instead of a per-release DOI.
+- README and quick start: a note on kinetic traces under "Amplitude
+  estimation". To follow a feature's amplitude across a series of profiles,
+  use the matched filter and read the signed `amplitude`. The note gives the
+  errors in fitted lifetimes for each amplitude method in simulation, and the
+  false floor of about 1.6 noise standard deviations in a trace built from
+  `cnr`.
 
 ## [0.3.3] - 2026-10-20
 
