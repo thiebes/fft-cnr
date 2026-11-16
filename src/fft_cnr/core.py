@@ -76,22 +76,35 @@ class CNREstimate:
     cnr : float
         Estimated contrast-to-noise ratio.
     cnr_ci95 : tuple[float, float]
-        95% confidence interval on CNR (delta-method approximation).
+        95% confidence interval on CNR (delta-method approximation):
+        ``cnr -/+ 1.96 * sqrt(amplitude_se**2 / noise_rms**2 +
+        amplitude**2 * se_noise**2 / noise_rms**4)``, with ``se_noise`` the
+        half-width of ``noise_ci95`` divided by 1.96. It treats the amplitude
+        and noise estimates as independent.
     amplitude : float
         Estimated signal amplitude. Signed on the peak and generalized-Gaussian
         paths: negative for a downward (absorption / dark-contrast) feature.
         ``cnr`` uses its magnitude.
     amplitude_se : float
         Standard error of the amplitude estimate (NaN if unavailable). On the
-        matched-filter and generalized-Gaussian paths this is a derived
-        standard error; on the default peak path it is an uncharacterized
-        proxy (``sigma / sqrt(kc_full)``) that understates the true scatter,
-        so it feeds ``cnr_ci95`` (where the noise term dominates) but is not
-        exposed through ``amplitude_snr``.
+        matched-filter path it is the exact standard error of the projection;
+        on the default peak path, the exact standard error of the read given
+        its location (the low-pass reconstruction at the peak minus the edge
+        baseline). Both use white noise of level ``noise_rms``, or the fitted
+        photon-transfer variance when ``estimate_noise_model`` finds
+        signal-dependent noise. On the generalized-Gaussian path it comes from
+        the fit covariance, which understates the scatter near CNR 2. The peak
+        value is conditional on the read location, which moves under noise at
+        low CNR, so it feeds ``cnr_ci95`` but is not exposed through
+        ``amplitude_snr``.
     noise_rms : float
         RMS noise estimated from high-frequency spectral region.
     noise_ci95 : tuple[float, float]
-        95% confidence interval on noise RMS.
+        95% confidence interval on noise RMS: a chi-squared interval on the
+        noise variance, with the effective degrees of freedom of the estimate
+        itself (the tapered, band-limited power of the full record, reported
+        as ``diagnostics["dof"]``). Exact for white Gaussian noise, given the
+        signal/noise boundary.
     cutoff_index : int
         Spectral index separating signal from noise.
     diagnostics : dict
@@ -214,6 +227,69 @@ def _break_knee_loglog(
     return best_k
 
 
+def _noise_band_dof(
+    w: np.ndarray, kc_full: int, variance: np.ndarray | None = None
+) -> float:
+    """Effective chi-squared degrees of freedom of the noise-band power.
+
+    The noise variance estimate is the quadratic form ``x' W P W x / N`` in
+    the profile ``x``, with ``W`` the diagonal taper and ``P`` the projector
+    onto the rFFT bins at and above ``kc_full``. For Gaussian noise with
+    per-sample variances ``V`` (diagonal), its mean is proportional to
+    ``tr(W P W V)`` and its variance to ``2 tr((W P W V)**2)``, so the
+    chi-squared distribution with the same relative variance has
+    ``nu = tr(P U)**2 / tr((P U)**2)`` degrees of freedom, with
+    ``U = W V W``. Both traces are evaluated in the frequency domain, where
+    ``U`` acts as a circular convolution: the first is the kept-bin count
+    times ``mean(u)``, the second sums the squared transform of ``u`` over
+    every pair of kept bins.
+
+    The value is conditional on the cutoff. For white noise (``V``
+    constant) it reduces to the number of kept real spectral components for a
+    flat window, and to about ``N * mean(w**2)**2 / mean(w**4)`` times the
+    kept fraction for a taper whose transform is narrow relative to the kept
+    band. Unequal variances lower it.
+
+    The form ignores the level subtracted before the taper (the record mean,
+    or on the Tukey path the edge level), a rank-one change that moves the
+    degrees of freedom by at most about 1% from N = 28 and under 0.3% from
+    N = 128.
+
+    Parameters
+    ----------
+    w : np.ndarray
+        Taper applied to the profile before the transform.
+    kc_full : int
+        Cutoff index on the full rFFT grid; bins below it are excluded.
+    variance : np.ndarray or None
+        Per-sample noise variance; None for white noise.
+
+    Returns
+    -------
+    float
+        Effective degrees of freedom of the noise variance estimate.
+    """
+    N = w.size
+    u = w**2 if variance is None else w**2 * variance
+    k = np.arange(N)
+    in_band = (np.minimum(k, N - k) >= kc_full).astype(float)
+    u_power = np.abs(np.fft.fft(u) / N) ** 2
+    # Number of kept-bin pairs at each circular frequency separation.
+    pair_counts = np.fft.ifft(np.abs(np.fft.fft(in_band)) ** 2).real
+    trace = float(np.sum(in_band) * np.mean(u))
+    trace_sq = float(np.sum(pair_counts * u_power))
+    if trace_sq <= 0.0:
+        return 1.0
+    return trace**2 / trace_sq
+
+
+def _noise_ci(sigma: float, nu: float) -> tuple[float, float]:
+    """Chi-squared 95% confidence interval on the noise level."""
+    lower = (nu * sigma**2) / chi2.ppf(0.975, nu)
+    upper = (nu * sigma**2) / chi2.ppf(0.025, nu)
+    return (float(np.sqrt(lower)), float(np.sqrt(upper)))
+
+
 class _SpectralDecomposition(NamedTuple):
     """Signal/noise band split of a profile: steps 1-4 of the fft_cnr pipeline.
 
@@ -225,7 +301,7 @@ class _SpectralDecomposition(NamedTuple):
     x_mean: float  # subtracted mean (physical offset)
     w: np.ndarray  # taper window
     w_rms: float
-    X: np.ndarray  # unitary rFFT of the tapered signal
+    X: np.ndarray  # unitary rFFT of the tapered signal (noise path)
     Pxx_full: np.ndarray  # Welch PSD interpolated to the full rFFT grid
     welch_nperseg: int  # resolved segment length
     welch_noverlap: int  # resolved overlap
@@ -233,7 +309,7 @@ class _SpectralDecomposition(NamedTuple):
     x_bp: np.ndarray  # high-frequency residual of the tapered signal
     kept: int  # noise-band bin count
     frac_kept: float  # noise-band fraction (shared attenuation convention)
-    nu: int  # chi-squared degrees of freedom for the noise CI
+    nu: float  # chi-squared degrees of freedom for the noise CI
     sigma: float  # noise RMS
     sigma_ci: tuple[float, float]
     x_lp: np.ndarray  # low-pass reconstruction (pre-window signal estimate)
@@ -254,6 +330,7 @@ def _spectral_decomposition(
 
     # Detrend and taper
     x_mean = float(np.mean(x))
+    x_raw = x
     x = x - x_mean
     if window == "tukey":
         w = tukey(N, alpha=tukey_alpha)
@@ -261,7 +338,21 @@ def _spectral_decomposition(
         w = get_window("hann", N, fftbins=True)
     else:
         w = np.ones(N)
-    xw = x * w
+    # The noise path tapers the profile relative to its edge level, the mean
+    # of the samples under the Tukey ramps. Relative to the record mean, a
+    # localized feature leaves a pedestal that the taper ramps down over
+    # tukey_alpha * N / 2 samples; on a short record that ramp has power
+    # above the cutoff, which would be counted as noise. A Hann ramp spans
+    # the record and confines the pedestal to the lowest bins, and an
+    # untapered pedestal is pure DC, so only the Tukey path needs this.
+    # The demeaned x, which feeds the Welch PSD, the low-pass reconstruction,
+    # and the matched filter, is unchanged.
+    if window == "tukey":
+        ramp = max(1, int(np.ceil(tukey_alpha * N / 2)))
+        edge_level = float(np.mean(np.concatenate((x_raw[:ramp], x_raw[-ramp:]))))
+        xw = (x_raw - edge_level) * w
+    else:
+        xw = x * w
     w_rms = np.sqrt(np.mean(w**2))
 
     # Unitary rFFT
@@ -273,7 +364,7 @@ def _spectral_decomposition(
         welch_nperseg += welch_nperseg % 2  # ensure even
     if welch_noverlap is None:
         welch_noverlap = welch_nperseg // 2
-    Pxx, dof = _welch_psd_unitary(x, welch_nperseg, welch_noverlap, win="hann")
+    Pxx, _ = _welch_psd_unitary(x, welch_nperseg, welch_noverlap, win="hann")
 
     # Interpolate Welch PSD to full FFT frequency grid
     nfft_bins = N // 2 + 1
@@ -303,13 +394,11 @@ def _spectral_decomposition(
         / ((w_rms * np.sqrt(frac_kept)) if w_rms > 0 else 1.0)
     )
 
-    # Confidence interval for sigma via Welch degrees of freedom
-    frac = kept / max(1, len(X_bp))
-    nu = max(2, int(dof * frac))
-    alpha_ci = 0.05
-    lower = (nu * sigma**2) / chi2.ppf(1 - alpha_ci / 2, nu)
-    upper = (nu * sigma**2) / chi2.ppf(alpha_ci / 2, nu)
-    sigma_ci = (np.sqrt(lower), np.sqrt(upper))
+    # Confidence interval for sigma. The degrees of freedom are those of the
+    # estimate itself (the tapered, band-limited power of the full record),
+    # not of the Welch spectrum, which only locates the knee.
+    nu = _noise_band_dof(w, kc_full)
+    sigma_ci = _noise_ci(sigma, nu)
 
     # Low-pass reconstruction of the signal via spectral low-pass filter:
     # FFT the original (pre-window) demeaned signal, zero the noise
@@ -591,6 +680,29 @@ _NOISE_MODEL_TEST_LEVEL = 0.05
 _NOISE_MODEL_MIN_RANGE_SIGMAS = 3.0
 
 
+def _peak_read_weights(N: int, peak_idx: int, kc_full: int, margin: int) -> np.ndarray:
+    """Weights ``a`` with the peak-path amplitude equal to ``a' x``.
+
+    The peak read is the low-pass reconstruction at ``peak_idx`` minus the
+    mean of the ``margin`` samples at each end of the raw profile. The
+    low-pass keeps the DC bin, so the subtracted profile mean cancels and the
+    read is linear in the raw profile with ``a = L e_i - b``: ``L e_i`` is the
+    low-pass of a unit impulse at the read location, ``b`` the edge average.
+    Given the location, the read's variance is ``sum(a**2 * v)`` for
+    per-sample noise variances ``v``, and ``sigma**2 * sum(a**2)`` for white
+    noise. The location itself moves under noise at low CNR, which this
+    conditional variance does not include.
+    """
+    impulse = np.zeros(N)
+    impulse[peak_idx] = 1.0
+    spectrum = np.fft.rfft(impulse, norm="ortho")
+    spectrum[kc_full:] = 0.0
+    weights = np.fft.irfft(spectrum, n=N, norm="ortho")
+    weights[:margin] -= 1.0 / (2 * margin)
+    weights[-margin:] -= 1.0 / (2 * margin)
+    return weights
+
+
 def _feature_peak_and_width(x_lp: np.ndarray) -> tuple[int, int]:
     """Locate the largest-magnitude feature and measure its half-prominence width.
 
@@ -777,13 +889,17 @@ def fft_cnr(
         Tapering window: ``"tukey"``, ``"hann"``, or ``"none"``.
     tukey_alpha : float
         Shape parameter for the Tukey window (0 = rectangular, 1 = Hann).
+        The noise estimate tapers the profile relative to the mean of the
+        ``max(1, ceil(tukey_alpha * N / 2))`` samples at each end (the samples
+        under the taper ramps), so that a feature's offset above the edges is
+        not ramped into the noise band.
     welch_nperseg : int or None
         Segment length for Welch PSD estimation. Defaults to max(16, N//8).
         With 50% overlap this heuristic produces approximately 15 Welch
-        segments at any signal length, giving consistent degrees of freedom
-        for the noise confidence interval. Longer segments reduce the segment
-        count and widen the noise CI substantially without improving CNR
-        accuracy.
+        segments at any signal length. The Welch spectrum only locates the
+        signal/noise boundary; the noise level and its confidence interval
+        come from the full-record transform, so the segment length affects
+        them only through the boundary it selects.
     welch_noverlap : int or None
         Overlap for Welch segments. Defaults to nperseg // 2.
     cutoff_guard : tuple[float, float]
@@ -807,8 +923,11 @@ def fft_cnr(
         read**2) to the residual, test the fitted gain for significance
         against a null calibrated through this same pipeline, and attach
         the result as ``noise_model``.  Works with every amplitude method.
-        Adds a Monte Carlo cost of about 200 re-runs of the spectral
-        decomposition.
+        When the gain is significant (``signal_dependent`` True), the fitted
+        variance replaces the white-noise forms in ``noise_ci95``,
+        ``amplitude_se`` (peak and matched-filter paths), and ``cnr_ci95``,
+        which under shot noise would otherwise undercover. Adds a Monte Carlo
+        cost of about 200 re-runs of the spectral decomposition.
     rng : numpy.random.Generator or None
         Random generator for the noise-model null calibration.  None
         (default) uses a fixed seed, so repeated calls on the same input
@@ -841,6 +960,10 @@ def fft_cnr(
         ``"amplitude_exceeds_data_range"``, ``"sigma_at_upper_bound"``, or
         ``"center_at_bound"``. When several conditions apply, the first in
         that order is named. The key is absent when the fit is kept or fails.
+
+        ``interval_noise`` names the noise the intervals assume: ``"white"``,
+        or ``"signal_dependent"`` when ``estimate_noise_model`` found
+        signal-dependent noise and its fitted variance was used.
 
     Raises
     ------
@@ -908,6 +1031,7 @@ def fft_cnr(
     sigma_ci = d.sigma_ci
     x_lp = d.x_lp
 
+    nu = d.nu
     noise_model = None
     noise_model_diags: dict = {}
     if estimate_noise_model:
@@ -919,6 +1043,18 @@ def fft_cnr(
             cutoff_guard=cutoff_guard,
             fallback_cut_frac=fallback_cut_frac,
         )
+
+    # Per-sample noise variance for the intervals. The white-noise forms are
+    # exact when the noise is white; when the detector finds signal-dependent
+    # noise, the fitted photon-transfer variance replaces them in the noise
+    # degrees of freedom and in the amplitude standard error.
+    variance = None
+    if noise_model is not None and noise_model.signal_dependent:
+        variance = np.clip(
+            noise_model.gain * (x_lp + x_mean) + noise_model.read**2, 0.0, None
+        )
+        nu = _noise_band_dof(w, kc_full, variance)
+        sigma_ci = _noise_ci(sigma, nu)
 
     # Amplitude estimation
     gfit_params: dict = {}
@@ -949,8 +1085,12 @@ def fft_cnr(
         Amp = float(np.sum(xw * tw) / denom)
         # Exact standard error of the projection under white noise of level
         # sigma: var(Amp) = sigma**2 * sum(w**2 * tw**2) / denom**2, which
-        # reduces to the textbook sigma / ||t|| when the window is flat.
-        Amp_se = float(sigma * np.sqrt(np.sum((w * tw) ** 2)) / denom)
+        # reduces to the textbook sigma / ||t|| when the window is flat. With
+        # per-sample variances v it is sum(w**2 * tw**2 * v) / denom**2.
+        if variance is None:
+            Amp_se = float(sigma * np.sqrt(np.sum((w * tw) ** 2)) / denom)
+        else:
+            Amp_se = float(np.sqrt(np.sum((w * tw) ** 2 * variance)) / denom)
         amp_method = "matched_filter"
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
@@ -975,8 +1115,13 @@ def fft_cnr(
         # (absorption / dark-contrast) feature is measured with the right sign;
         # for a positive peak this is the peak height, unchanged.
         dev = (x_lp + x_mean) - baseline
-        Amp = float(dev[int(np.argmax(np.abs(dev)))])
-        Amp_se = float(sigma / np.sqrt(max(1, kc_full)))
+        peak_idx = int(np.argmax(np.abs(dev)))
+        Amp = float(dev[peak_idx])
+        weights = _peak_read_weights(N, peak_idx, kc_full, margin)
+        if variance is None:
+            Amp_se = float(sigma * np.sqrt(np.sum(weights**2)))
+        else:
+            Amp_se = float(np.sqrt(np.sum(weights**2 * variance)))
         # Flag when an opposite-sign excursion rivals the chosen feature: the
         # largest-magnitude read could then switch features (and flip the sign)
         # under noise, and a localized rival does not trip lowfreq_dominated.
@@ -1015,7 +1160,8 @@ def fft_cnr(
     diags: dict = {
         "N": N,
         "window_rms": d.w_rms,
-        "dof": d.nu,
+        "dof": nu,
+        "interval_noise": "white" if variance is None else "signal_dependent",
         "welch_nperseg": d.welch_nperseg,
         "welch_noverlap": d.welch_noverlap,
         "kept_bins": d.kept,

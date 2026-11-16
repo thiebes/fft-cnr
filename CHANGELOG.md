@@ -15,9 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cooldown and the publish action proposed on its own.
 - A manually triggered run of the publish workflow tests, builds, and passes
   the distributions between jobs without publishing.
+- `diagnostics["interval_noise"]`: `"white"`, or `"signal_dependent"` when the
+  intervals use the variance fitted by `estimate_noise_model`.
+- `scripts/validate_interval_coverage.py`: Monte Carlo coverage, width, and
+  standard-error calibration of `noise_ci95` and `cnr_ci95` per amplitude path,
+  under white and shot noise.
 
 ### Changed
 
+- `noise_ci95`, and with it `cnr_ci95`, takes its degrees of freedom from the
+  noise estimate itself: the tapered, band-limited power of the full record,
+  whose effective degrees of freedom are computed exactly for white noise
+  (`tr(WPW)**2 / tr((WPW)**2)`, with `W` the taper and `P` the kept band). They
+  came from the Welch segment count, which only locates the signal/noise
+  boundary, and were 10 to 30 times too few for records of 128 samples or more:
+  both intervals were three to four times too wide and covered 0.99 to 1.00
+  against a nominal 0.95. On white noise the noise interval now covers 0.93 to
+  0.95, and at CNR 20 the CNR interval spans about 0.14 to 0.21 of the CNR
+  (N = 512 and 256) instead of about 0.58. `diagnostics["dof"]` is a float.
+  This change alone leaves `cnr`, `noise_rms`, and `amplitude` unchanged.
+- The peak path's `amplitude_se` is the exact standard error of the read given
+  its location, `noise_rms * ||L e_i - b||` (the low-pass reconstruction at the
+  peak minus the edge baseline), replacing the proxy `noise_rms /
+  sqrt(cutoff_index)`, which understated the scatter by up to a factor of two.
+  The oversized noise term had hidden this; with the noise interval corrected,
+  the peak-path CNR interval covers 0.94 to 0.95 from CNR 5 and 0.91 to 0.93 at
+  CNR 2, where the upward bias of the maximum read remains.
+- With `estimate_noise_model=True`, when the detector finds signal-dependent
+  noise, the fitted photon-transfer variance replaces the white-noise forms in
+  the noise degrees of freedom and in `amplitude_se` on the peak and
+  matched-filter paths. Under shot noise (background 10 counts, CNR 20) the
+  CNR interval then covers 0.93 to 0.95; the default, white-noise intervals
+  cover 0.80 to 0.84 there.
 - `diagnostics["gaussian_fit_rejected"]` is renamed
   `diagnostics["gaussian_fit_rejection_reason"]`. The value is a string naming
   the reason, and the old name read like the boolean flags beside it
@@ -48,6 +77,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On a short record, the noise estimate no longer counts the taper's edge ramps
+  as noise. The Tukey taper was applied to the mean-subtracted profile. On a
+  record spanning +/-4 standard deviations of a Gaussian feature the mean sits
+  about 0.31 of the peak above the edges, and the taper ramps that offset to
+  zero over N/8 samples, which puts power above the signal/noise boundary.
+  That leaked power is fixed while the noise falls, so `noise_rms` read high
+  and `cnr` low as the CNR rose: at N = 28, 40, and 52 a CNR of 100 read as
+  about 23, 44, and 78, and the CNR interval covered 0.00, 0.12, and 0.50. The
+  noise path now tapers the profile relative to its edge level, the mean of the
+  samples under the taper ramps. The amplitude, the Welch spectrum, the cutoff,
+  and the low-pass reconstruction are unchanged. On those records the median
+  noise level now reads within 2% of its expected value, except 4% high at
+  N = 28 and CNR 100, and the CNR interval covers 0.92 to 0.97 from CNR 5 on
+  every amplitude path. The change applies at every length, so `noise_rms` and
+  `cnr` are no longer identical to 0.3.3 from N = 128 either: on Gaussian,
+  generalized-Gaussian, Voigt, and narrow-peak profiles at N = 256 and 512 and
+  on pure noise at N = 128 to 1024, `noise_rms` moved by at most 0.24% on any
+  profile, with a median change of about 1e-5. With `roi="auto"`, whose window
+  is itself a short record, the same leak was present and the correction is
+  larger: for a Gaussian of standard deviation 10 samples at N = 512 and CNR
+  100 the median noise level fell from 1.10 to 1.00 times the true value. A
+  feature narrow enough to put its own power above the boundary keeps that
+  separate leak, and it can read slightly higher, because the pedestal ramp no
+  longer partly cancels it: for a Gaussian of standard deviation 3.1 samples
+  (full width at half maximum about 7.4) at N = 64 and CNR 100, the noise level
+  reads 1.44 instead of 1.41 times the true value. The Hann and untapered
+  windows are unaffected, because a Hann ramp spans the whole record and an
+  untapered offset is pure DC. With `estimate_noise_model=True` the
+  significance null draws its noise at `noise_rms`, so
+  `diagnostics["var_signal_p"]` can also shift slightly.
 - The generalized-Gaussian path also refuses a fit whose center is pinned at
   its bound, half a profile length outside the data
   (`gaussian_fit_rejection_reason == "center_at_bound"`), and falls back to the
