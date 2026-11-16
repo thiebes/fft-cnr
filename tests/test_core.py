@@ -7,7 +7,6 @@ import pytest
 
 from fft_cnr import CNREstimate, NoiseModel, fft_cnr
 from fft_cnr.core import (
-    _GG_CENTER_BOUND_TOL_TO_LENGTH,
     _GG_CENTER_MAX_TO_LENGTH,
     _GG_CENTER_MIN_TO_LENGTH,
     _GG_SIGMA_MAX_TO_LENGTH,
@@ -454,25 +453,29 @@ class TestEdgeCases:
 
     @pytest.mark.parametrize("bound", ["min", "max"])
     @pytest.mark.parametrize(
-        "tol_multiple, refused", [(0.5, True), (2.0, False)]
+        "samples_inside, refused", [(0.12, True), (0.48, False)]
     )
     def test_generalized_gaussian_center_bound_tolerance(
-        self, bound, tol_multiple, refused
+        self, bound, samples_inside, refused
     ):
-        """A center within the tolerance of either bound is refused; one at twice
-        the tolerance inside the bound is kept, which pins the tolerance."""
+        """The center tolerance is 1e-3 of the profile length, 0.241 samples at
+        N=241. A center 0.12 samples inside either bound is refused and one 0.48
+        samples inside is kept. The offsets are fixed in samples, not derived
+        from the constant, so the test fails if the tolerance moves outside
+        roughly 5e-4 to 2e-3 of the profile length."""
         N = 241
         y = np.random.default_rng(0).normal(0, 1, N)
-        tol = _GG_CENTER_BOUND_TOL_TO_LENGTH * N
         if bound == "min":
-            center = _GG_CENTER_MIN_TO_LENGTH * N + tol_multiple * tol
+            center = _GG_CENTER_MIN_TO_LENGTH * N + samples_inside
         else:
-            center = _GG_CENTER_MAX_TO_LENGTH * N - tol_multiple * tol
+            center = _GG_CENTER_MAX_TO_LENGTH * N - samples_inside
         popt = np.array([1.0, center, 20.0, 0.0, 2.0])
         with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
             result = fft_cnr(y, fit_model="generalized_gaussian")
         if refused:
+            assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
             assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+            assert "gaussian_fit_params" not in result.diagnostics
         else:
             assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
             assert "gaussian_fit_rejection_reason" not in result.diagnostics
