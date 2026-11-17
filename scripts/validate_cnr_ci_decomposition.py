@@ -1,9 +1,7 @@
 """Trace the amplitude standard error through to the CNR confidence interval.
 
-The companion sweep ``validate_amplitude_se.py`` shows that ``amplitude_se`` is
-calibrated differently on each amplitude path: the matched filter returns the
-exact closed-form error of its white-noise projection, while the peak path uses
-the proxy ``sigma / sqrt(kc_full)`` that understates the empirical scatter. That
+The companion sweep ``validate_amplitude_se.py`` measures how well
+``amplitude_se`` matches the empirical scatter on each amplitude path. That
 sweep stops at the standard error. This one asks the next question: does an
 amplitude-SE miscalibration actually reach the shipped ``cnr_ci95``, or is it
 swallowed by the chi-squared noise term?
@@ -168,11 +166,10 @@ def main():
     # --- Interpretation ---
     print("=" * 72)
     print("Reading:")
-    print("  Table 3 is the decisive one. If the matched-filter amplitude")
-    print("  fraction is small, the inflated amplitude_se is masked by the")
-    print("  noise term and barely reaches cnr_ci95 (latent). If it is large,")
-    print("  the inflation is a live defect in the shipped interval -- visible")
-    print("  as inflated width (Table 2) and over-coverage (Table 1).")
+    print("  Table 3 shows how much of the CNR variance comes from the amplitude")
+    print("  standard error. Where that share is small, an error in amplitude_se")
+    print("  barely moves cnr_ci95; where it is large, the error shows directly")
+    print("  in the interval's width (Table 2) and coverage (Table 1).")
     print("=" * 72)
 
 
