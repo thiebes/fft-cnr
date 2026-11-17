@@ -3,9 +3,10 @@
 The reported ``amplitude_se`` (and the derived ``amplitude_snr``) is computed
 differently on each amplitude path: the matched filter returns the exact
 closed-form standard error of its white-noise projection (noise-only weighting),
-the generalized-Gaussian fit returns the amplitude error from its covariance,
-and the default peak path returns the proxy ``sigma / sqrt(kc_full)`` whose
-calibration was never characterized.
+the default peak path returns the exact standard error of its read given the
+peak location (``sigma * ||L e_i - b||``, the low-pass reconstruction at the
+peak minus the edge baseline), and the generalized-Gaussian fit returns the
+amplitude error from its covariance.
 
 This sweep measures, for each path, the ratio of the predicted standard error
 to the empirical standard deviation of the amplitude estimate over many noise
@@ -182,12 +183,13 @@ def main():
     print("=" * 72)
     print("Summary (SE calibration ratio = predicted SE / empirical scatter):")
     print(f"  Peak path (all shapes/N/CNR):        "
-          f"{min(peak_ratios):.2f} -- {max(peak_ratios):.2f}  (understates scatter)")
+          f"{min(peak_ratios):.2f} -- {max(peak_ratios):.2f}")
     print(f"  Generalized-Gaussian (Gaussian):     "
           f"{min(gg_ratios):.2f} -- {max(gg_ratios):.2f}")
     print(f"  Matched filter (Gaussian):           "
-          f"{min(matched_ratios):.2f} -- {max(matched_ratios):.2f}  "
-          f"(noise-only whitening)")
+          f"{min(matched_ratios):.2f} -- {max(matched_ratios):.2f}")
+    print("  Below 1 the reported error understates the scatter; above 1 it")
+    print("  overstates it.")
     print("=" * 72)
 
 

@@ -90,12 +90,15 @@ can be separated.
 
 1. The input profile is mean-subtracted and tapered with a window function (a
    tapered cosine, or Tukey, window by default) to suppress edge artifacts in
-   the Fourier transform.
+   the Fourier transform. For the noise estimate, the Tukey taper is applied
+   relative to the profile's edge level (the mean of the samples under the
+   taper ramps) instead of its mean. On a short record around a localized
+   feature the mean sits well above the edges, and the taper would turn that
+   offset into short ramps whose power reads as noise.
 2. The power spectrum is estimated by averaging the transforms of overlapping
    segments, which is smoother than a single transform (the averaged-segment, or
-   Welch, method). More segments give the noise estimate more degrees of
-   freedom, which tightens its confidence interval; this does not by itself
-   improve the CNR point estimate.
+   Welch, method). This smoothed spectrum is used only to locate the
+   signal/noise boundary in the next step.
 3. The power spectrum typically shows high power at low frequencies, where the
    signal lives, that levels off to a flat noise floor at higher frequencies.
    The algorithm finds this transition by fitting two line segments in log-log
@@ -109,14 +112,20 @@ can be separated.
    level.
 5. Signal amplitude is estimated by one of three methods (see below), and
    CNR = amplitude / noise RMS.
-6. A 95% confidence interval on CNR is computed by first-order error propagation
-   (the delta method), combining the amplitude error and the chi-squared noise
-   interval.
+6. The noise level gets a chi-squared 95% confidence interval whose degrees of
+   freedom are those of the estimate itself: the tapered, band-limited power of
+   the whole profile. For white noise and the default taper this is about 0.87
+   times the number of samples times the fraction of the band kept (the factor
+   is `mean(w**2)**2 / mean(w**4)` for the taper `w`). A 95% confidence
+   interval on CNR is then computed by first-order error propagation (the
+   delta method), combining the
+   amplitude standard error and the noise interval as independent terms.
 
 The method works best when the signal occupies low frequencies and the noise is
 broadband (approximately white). The hard minimum length is 16 points (shorter
-inputs raise `ValueError`); reliable knee detection needs more, with measurable
-bias below roughly 128 points (see Accuracy). Signals with strong high-frequency
+inputs raise `ValueError`). Reliable results need more, and how many more
+depends on how much of the record the feature fills (see Profile length under
+Accuracy). Signals with strong high-frequency
 content that overlaps the noise band will also bias the CNR estimate.
 
 ## Amplitude estimation
@@ -146,16 +155,23 @@ Two alternatives are available:
   to flat-topped. Useful when fitted parameters (center, width, shape) are
   needed in addition to CNR. The fit can degenerate, most often on
   noise-dominated profiles, for example into a flat-topped model as wide as the
-  profile whose amplitude and baseline cancel. A fit whose amplitude exceeds
-  twice the data's peak-to-peak range, whose width is pinned at the profile
-  length, or whose center is pinned at its bound half a profile length outside
-  the data, is refused at any CNR, and the estimate falls back to the peak
-  method; `diagnostics["gaussian_fit_rejection_reason"]` names the reason, and
+  profile whose amplitude and baseline cancel. The fit is refused at any CNR if
+  its amplitude exceeds twice the data's peak-to-peak range, its width is
+  pinned at the profile length, or its center is pinned at its bound, half a
+  profile length outside the data. The estimate then falls back to the peak
+  method, and `diagnostics["gaussian_fit_rejection_reason"]` names the reason.
   `diagnostics["gaussian_fit_params"]` is then absent, as it is when the fit
-  fails to converge. The screen tests only these three conditions. A runaway
-  fit that meets none of them, such as a narrow fit centered just outside the
-  profile, is still reported, so treat a generalized-Gaussian CNR far above
-  the peak-method value on a noisy profile with caution.
+  does not converge. A feature whose peak sits at the edge of the profile can
+  also meet the center condition. In validation at CNR 3 and above, the
+  peak-method fallback was closer to the true amplitude there than the refused
+  fit. The screen tests only
+  these three conditions. A fit centered outside the profile but short of its
+  bound, up to almost half a profile length outside, is kept. A runaway fit
+  that meets none of the conditions is therefore still reported, so treat a
+  generalized-Gaussian CNR far above the peak-method value on a noisy profile
+  with caution. Its amplitude standard error comes from the fit covariance,
+  which understates the scatter near CNR 2, so the CNR interval on this path
+  covers about 0.8 there (see [Confidence intervals](#confidence-intervals)).
 
 The `result.amplitude_snr` property reports the matched-filter signal-to-noise
 ratio (amplitude over its standard error). A larger value means the amplitude
@@ -173,6 +189,41 @@ result = fft_cnr(noisy, template=signal)
 result = fft_cnr(noisy, fit_model="generalized_gaussian")
 print(result.diagnostics.get("gaussian_fit_params"))  # absent on fallback
 ```
+
+### Kinetic traces
+
+To follow a feature's amplitude across a series of profiles, such as pump-probe
+spectra at successive delays, use the matched filter with a template at the
+feature's known position and width, and read the signed `amplitude`.
+
+The peak method reads the largest excursion of the smoothed profile, of either
+sign. Once the feature has decayed into the noise, that excursion is noise. The
+signed `amplitude` then averages zero over many profiles, but it scatters by
+about 1.7 noise standard deviations, against 0.10 for the matched filter. While
+the feature is weak but still present (about 0.5 to 3 noise standard
+deviations), the peak method reads high. The magnitude of the peak amplitude,
+`cnr * noise_rms`, averages about 1.6 noise standard deviations on a profile
+with no feature, so a trace built from `cnr` stops decaying at a false floor.
+The generalized Gaussian fit follows a strong decaying feature, but it reads a
+weak long-lived component short.
+
+These statements come from a simulation of a Gaussian band (standard deviation
+about 77 points in a 1024-point spectrum) that decays over 81 delays in white
+noise, with 200 delay series per condition and exponential fits to each trace.
+The initial CNR is the band amplitude at the first delay over the noise level.
+The weak long-lived component has 0.2 of the initial amplitude and ten times
+the fast lifetime.
+
+| Amplitude read from | Single-exponential lifetime, initial CNR 10 / 20 | Long-lived lifetime, initial CNR 10 / 20 |
+| ------------------------- | ------------------------- | ------------------------- |
+| Matched filter | within 0.1% | within 0.6% |
+| Peak method, `amplitude` | 6.7% / 2.4% long | 71% / 56% long |
+| Generalized Gaussian fit | 3.2% / 0.8% short | 46% / 35% short |
+
+A single-exponential fit with a constant offset to the magnitude trace returns
+a false offset of 15% of the initial amplitude at an initial CNR of 10 and 7%
+at 20. On profiles where the band has decayed, the generalized Gaussian fit
+falls back to the peak method in 5% to 7% of cases.
 
 ## Noise model detection
 
@@ -206,6 +257,15 @@ appears in `diagnostics["noise_model_skipped"]`). To judge significance, the
 package runs the whole estimation pipeline on about 200 simulated data sets, so
 the test accounts for the estimator's own artifacts. These extra runs cost
 roughly half a second at N=512.
+
+When the gain is significant, the fitted variance also sets the intervals:
+`noise_ci95`, `amplitude_se` on the peak and matched-filter paths, and
+`cnr_ci95` use it in place of the single noise level, and
+`diagnostics["interval_noise"]` reads `"signal_dependent"`. The default
+intervals assume white noise; under shot noise they are too narrow, because the
+noise is largest under the peak, which is where the amplitude estimate puts its
+weight. Use `estimate_noise_model=True` for photon-limited data when the
+intervals matter.
 
 The detection is deterministic by default: the same input always produces the
 same result. Pass your own random generator (`rng=np.random.default_rng()`)
@@ -288,7 +348,7 @@ advanced inspection.
 | `noise_rms` | `float` | RMS noise from the high-frequency spectral region |
 | `noise_ci95` | `tuple[float, float]` | 95% confidence interval on noise RMS |
 | `cutoff_index` | `int` | Spectral index of the signal/noise boundary |
-| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), generalized-Gaussian fit-refusal reason (`gaussian_fit_rejection_reason`), and `roi` bounds when set |
+| `diagnostics` | `dict` | Welch parameters, DOF, amplitude method, fit params, low-frequency baseline guard (`lowfreq_dominated`, `lowfreq_offpeak_ratio`), peak-read sign-ambiguity flag (`amplitude_sign_ambiguous`), generalized-Gaussian fit-refusal reason (`gaussian_fit_rejection_reason`), the noise the intervals assume (`interval_noise`), and `roi` bounds when set |
 | `noise_model` | `NoiseModel \| None` | Fitted noise structure (`None` unless requested) |
 
 ## Parameters
@@ -319,8 +379,7 @@ works for guidance on length.
 ## Accuracy
 
 Monte Carlo validation (200 trials per condition, `scripts/validate_accuracy.py`)
-characterizes bias, precision, and confidence-interval coverage across five
-signal shapes: Gaussian, heavy-tailed (generalized Gaussian, p=1.5),
+characterizes bias and precision across five signal shapes: Gaussian, heavy-tailed (generalized Gaussian, p=1.5),
 flat-topped (p=4), Gaussian mixture, and Lorentzian. All conditions use additive
 white Gaussian noise, the regime the method assumes, so the headline accuracy
 numbers inherit that assumption.
@@ -368,6 +427,18 @@ Gaussian's tails and the amplitude reads about 8.5% low even without noise.
 | 256 | 1.03 | 1.00 | 1.00 |
 | 512 | 1.01 | 1.01 | 1.00 |
 
+Records much shorter than 128 points work when the feature is narrow enough to
+leave some baseline at the edges. For a Gaussian feature in a record spanning
++/-4 standard deviations (N=28, 40, and 52; 2000 trials per condition,
+`scripts/validate_interval_coverage.py --lengths 28 40 52 --width-to-length 0.125`),
+the median CNR ratio from CNR=5 to 100 at N=40 and 52 is 1.00--1.01 on the
+matched filter, 1.01--1.04 on the generalized Gaussian fit, and 0.98--1.02 on
+the peak method. At N=28 and CNR=100 the coarse cutoff leaves some of the
+feature's own power in the noise band, so the noise level reads 4% high, and
+the CNR reads 0.95 (matched filter), 0.96 (generalized Gaussian), and 0.92
+(peak, whose amplitude also reads a few percent low on short records) of the
+true value.
+
 ### Precision
 
 Trial-to-trial scatter (relative standard deviation) scales as roughly
@@ -376,24 +447,56 @@ method, CNR=5). Providing a matched template reduces scatter at low CNR.
 
 ### Confidence intervals
 
-The 95% confidence intervals contain the true value in 99 to 100% of trials
-across all tested conditions, so they are reliable but wider than a true 95%
-interval. The interval combines two terms, the uncertainty in the amplitude and
-the uncertainty in the noise level, and which term makes it wide depends on the
-amplitude method.
+Coverage of the 95% intervals was measured on white Gaussian noise with a
+Gaussian feature (2000 trials per condition,
+`scripts/validate_interval_coverage.py`). The noise interval `noise_ci95`
+contains the true noise level in 93 to 95% of trials for N from 64 to 1024, and
+in 94 to 96% for the short records described under Profile length (92% at N=28
+and CNR=100). From CNR=5 the CNR interval on those short records covers 0.92 to
+0.97 on every method. The exception is a feature narrow enough to put its own
+power above the signal/noise boundary: at N=64 a Gaussian feature with
+sigma=3.1 samples (FWHM about 7.4) reads the noise 1.44 times high at CNR=100,
+and the noise interval covers 0.36. The
+CNR interval combines the amplitude standard error and the noise interval as
+independent terms; its coverage and median width (relative to the true CNR) are:
 
-For the peak and generalized-Gaussian methods the noise term dominates. The
-degrees of freedom used for the chi-squared noise interval are set
-conservatively, so that term, and the combined interval, come out wider than
-nominal.
+| Method | CNR=2 | CNR=5 | CNR=10--100 | Width at CNR=20 (N=256 / 512) |
+| -------------- | ----------- | ----------- | ----------- | ----------------------------- |
+| Peak | 0.91--0.93 | 0.94--0.95 | 0.94--0.95 | 0.22 / 0.15 |
+| Gen. Gaussian | 0.79--0.82 | 0.94--0.95 | 0.94--0.95 | 0.21 / 0.15 |
+| Matched filter | 0.95 | 0.95 | 0.95 | 0.21 / 0.14 |
 
-For the matched-filter method (a supplied template) the amplitude standard error
-is the exact closed-form error of the white-noise projection: the windowed data
-projected onto the windowed template, with error sigma divided by the template
-norm for a flat window. The noise term still dominates the combined interval at
-the conservative degrees of freedom above, so the matched-filter interval comes
-out comparable in width to the others while resting on the most precise amplitude
-estimate.
+The reported standard errors match the trial-to-trial scatter: their ratio is
+0.98 to 0.99 for the noise level on every method, and 0.91 to 1.05 for the
+amplitude on the peak and matched-filter methods. Two limits remain. On the
+peak method at CNR=2 the maximum of the noisy reconstruction biases the CNR
+10--19% high, which no standard error can absorb; below CNR=3 the matched
+filter is the better choice. On the generalized-Gaussian method at CNR=2 the
+fit covariance understates the amplitude scatter.
+
+These figures are for a feature centered in the profile. On the peak method the
+interval also assumes that the feature has decayed within the outer quarters of
+the profile, where the baseline is read (see
+[Amplitude estimation](#amplitude-estimation)). A feature that reaches them is
+read low, and the interval, whose width reflects only the noise, does not cover
+that bias. For a Gaussian with sigma=30 samples centered on the first sample of
+a 512-point profile, the peak method reads the CNR at 0.84 of the true value and
+its interval covers 0.04; for the same feature centered at 0.15 of the profile
+length, 0.72 and 0.00 (1000 trials each). A centered Gaussian with sigma=60
+samples (3.6 FWHM in the profile) covers 0.90 to 0.92 at CNR=20 to 50. The
+matched filter does not use this baseline and covers 0.94 to 0.95 in all three
+cases, so use it, or
+`roi` bounds that leave margin on both sides of the feature, when the feature
+is near the edge of the profile.
+
+Under shot noise the default intervals assume one noise level and are too
+narrow: with a background of 10 counts and CNR 20, the CNR interval covers 0.84
+(matched filter) and 0.82 (peak). With `estimate_noise_model=True` the detector
+fires on such data and the intervals use the fitted variance, which restores
+coverage to 0.95 on both methods. The reference noise level there is the
+taper-weighted root mean variance, `sqrt(mean(w**2 * var) / mean(w**2))`,
+which `noise_rms` estimates; it exceeds the plain root mean variance by up to
+7.5% when a strong peak sits over a weak background.
 
 ### Noise model detection
 
@@ -418,7 +521,7 @@ value, and the derived peak SNR tracks the true peak signal-to-noise ratio
 
 If you use fft-cnr in published work, please cite it with the concept DOI below,
 which always resolves to the latest release, and report the version you used
-(`pip install fft-cnr==0.3.3`).
+(`pip install fft-cnr==0.4.0`).
 
 > Joseph J. Thiebes. fft-cnr: FFT-based contrast-to-noise ratio estimation from
 > a single frame. Zenodo. https://doi.org/10.5281/zenodo.20691435
@@ -427,7 +530,7 @@ which always resolves to the latest release, and report the version you used
 @software{thiebes_fft_cnr,
   author    = {Thiebes, Joseph J.},
   title     = {fft-cnr: FFT-based contrast-to-noise ratio estimation from a single frame},
-  version   = {0.3.3},
+  version   = {0.4.0},
   year      = {2026},
   publisher = {Zenodo},
   doi       = {10.5281/zenodo.20691435},

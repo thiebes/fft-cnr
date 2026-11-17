@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-17
 
 ### Added
 
@@ -15,9 +15,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cooldown and the publish action proposed on its own.
 - A manually triggered run of the publish workflow tests, builds, and passes
   the distributions between jobs without publishing.
+- `diagnostics["interval_noise"]`: `"white"`, or `"signal_dependent"` when the
+  intervals use the variance fitted by `estimate_noise_model`.
+- `scripts/validate_interval_coverage.py`: Monte Carlo coverage, width, and
+  standard-error calibration of `noise_ci95` and `cnr_ci95` per amplitude path,
+  under white and shot noise.
 
 ### Changed
 
+- `noise_ci95`, and with it `cnr_ci95`, takes its degrees of freedom from the
+  noise estimate itself: the tapered, band-limited power of the full record,
+  whose effective degrees of freedom are computed exactly for white noise
+  (`tr(WPW)**2 / tr((WPW)**2)`, with `W` the taper and `P` the kept band). They
+  came from the Welch segment count, which only locates the signal/noise
+  boundary, and were 4 to 30 times too few for records of 128 to 1024 samples
+  (more so the longer the record). The noise interval was 2 to 6 times too
+  wide, the CNR interval at CNR 20 about 3 to 4 times (N = 256 and 512), and
+  both covered 0.99 to 1.00 against a nominal 0.95. On white noise the noise
+  interval now covers 0.93 to 0.95, and at CNR 20 the CNR interval spans about
+  0.14 to 0.21 of the CNR
+  (N = 512 and 256) instead of about 0.58. `diagnostics["dof"]` is a float.
+  This change alone leaves `cnr`, `noise_rms`, and `amplitude` unchanged.
+- The peak path's `amplitude_se` is the exact standard error of the read given
+  its location, `noise_rms * ||L e_i - b||` (the low-pass reconstruction at the
+  peak minus the edge baseline), replacing the proxy `noise_rms /
+  sqrt(cutoff_index)`, which understated the scatter by up to a factor of two.
+  The oversized noise term had hidden this; with the noise interval corrected,
+  the peak-path CNR interval covers 0.94 to 0.95 from CNR 5 and 0.91 to 0.93 at
+  CNR 2, where the upward bias of the maximum read remains. These figures are
+  for a feature centered in the profile. A feature that reaches the outer
+  quarters of the profile, where the peak path reads its baseline, is read low,
+  and the narrower interval no longer hides that bias: for a Gaussian of
+  standard deviation 30 samples centered on the first sample of 512, the CNR
+  reads 0.84 of the true value and the interval covers 0.04, where 0.3.3
+  covered 0.95 only because its interval was about four times too wide. The
+  matched filter covers 0.94 to 0.95 there.
+- With `estimate_noise_model=True`, when the detector finds signal-dependent
+  noise, the fitted photon-transfer variance replaces the white-noise forms in
+  the noise degrees of freedom and in `amplitude_se` on the peak and
+  matched-filter paths. Under shot noise (background 10 counts, CNR 20) the
+  CNR interval then covers 0.93 to 0.95; the default, white-noise intervals
+  cover 0.80 to 0.84 there.
 - `diagnostics["gaussian_fit_rejected"]` is renamed
   `diagnostics["gaussian_fit_rejection_reason"]`. The value is a string naming
   the reason, and the old name read like the boolean flags beside it
@@ -26,8 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The source distribution lists its contents explicitly: the package, tests,
   docs, validation scripts, `README.md`, `LICENSE`, `CHANGELOG.md`, and
   `CITATION.cff`, plus `pyproject.toml` and `.gitignore`, which the build
-  backend always includes. Repository-only files are no longer included (`assets/`,
-  `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `uv.lock`, `.github/`,
+  backend always includes. Repository-only files are no longer included
+  (`assets/`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `uv.lock`, `.github/`,
   `.readthedocs.yaml`, `.gitattributes`), nor are files that are ignored only
   locally. The wheel is unchanged.
 - The test, docs, and compatibility workflow tokens are restricted to
@@ -48,16 +86,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The matched filter's `amplitude_se` is now the exact standard error of the
+  projection. The data are demeaned before the projection, so its weights in
+  the raw profile have their mean removed; the error was computed with the
+  mean left in, which overstated it by about 0.3% for a narrow centered
+  feature, 1 to 2% for a centered feature that fills the record, about 4% at
+  the profile edge, and over 30% for a template centered outside the data. The
+  amplitude is unchanged; `amplitude_se`, `amplitude_snr`, and `cnr_ci95` on
+  the template path are slightly smaller.
+- On a short record, the noise estimate no longer counts the taper's edge ramps
+  as noise. The Tukey taper was applied to the mean-subtracted profile. On a
+  record spanning +/-4 standard deviations of a Gaussian feature the mean sits
+  about 0.31 of the peak above the edges, and the taper ramps that offset to
+  zero over N/8 samples, which puts power above the signal/noise boundary.
+  That leaked power is fixed while the noise falls, so `noise_rms` read high
+  and `cnr` low as the CNR rose: at N = 28, 40, and 52 a CNR of 100 read as
+  about 23, 44, and 78, and the CNR interval covered 0.00, 0.12, and 0.50. The
+  noise path now tapers the profile relative to its edge level, the mean of the
+  samples under the taper ramps. The amplitude, the Welch spectrum, the cutoff,
+  and the low-pass reconstruction are unchanged. On those records the median
+  noise level now reads within 2% of its expected value, except 4% high at
+  N = 28 and CNR 100, and for a centered feature the CNR interval covers 0.92
+  to 0.97 from CNR 5 on every amplitude path. The change applies at every
+  length, so `noise_rms` and `cnr` are no longer identical to 0.3.3 from
+  N = 128 either: on Gaussian, generalized-Gaussian, Voigt, and narrow-peak
+  profiles at N = 256 and 512 and on pure noise at N = 128 to 1024,
+  `noise_rms` moved by at most 0.24% on any
+  profile, with a median change of about 1e-5. With `roi="auto"`, whose window
+  is itself a short record, the same leak was present and the correction is
+  larger: for a Gaussian of standard deviation 10 samples at N = 512 and CNR
+  100 the median noise level fell from 1.10 to 1.00 times the true value. A
+  feature narrow enough to put its own power above the boundary keeps that
+  separate leak, and it can read slightly higher, because the pedestal ramp no
+  longer partly cancels it: for a Gaussian of standard deviation 3.1 samples
+  (full width at half maximum about 7.4) at N = 64 and CNR 100, the noise level
+  reads 1.44 instead of 1.41 times the true value. The Hann and untapered
+  windows are unaffected, because a Hann ramp spans the whole record and an
+  untapered offset is pure DC. With `estimate_noise_model=True` the
+  significance null draws its noise at `noise_rms`, so
+  `diagnostics["var_signal_p"]` can also shift slightly.
 - The generalized-Gaussian path also refuses a fit whose center is pinned at
   its bound, half a profile length outside the data
-  (`gaussian_fit_rejection_reason == "center_at_bound"`). Such a fit describes
-  only a broad wing reaching into the profile, usually with the wrong sign, and
-  on noise-dominated profiles it could read a CNR near 10. A center just
-  outside the profile is still accepted, because a genuine feature can sit at
-  the edge of the data. In validation (Gaussian, heavy-tailed, flat-topped,
-  Gaussian-mixture, and Lorentzian profiles; N=241 and 512; CNR 0.1 to 20;
-  400 profiles per condition), the rule refused no fit within 50% of the true
-  amplitude.
+  (`gaussian_fit_rejection_reason == "center_at_bound"`), and falls back to the
+  peak method. Some fits kept in 0.3.3 therefore fall back in 0.4.0: on those
+  profiles `diagnostics["gaussian_fit_params"]` is absent and `cnr` changes. A
+  center outside the profile but short of its bound, up to almost half a
+  profile length outside, is still accepted, because a genuine feature can sit
+  at the edge of the data. A runaway fit that meets none of the three
+  conditions is still reported. In validation, at most 1% of profiles at CNR
+  0.3 read a CNR above 5, and the runaway fits that were kept reached a fit
+  CNR of up to 12.5 at a true CNR of 1.5 or below.
+- Validation of the center rule, for a feature inside the profile. It used
+  five shapes with the feature centered (profile lengths 241 and 512, CNR 0.1
+  to 20, 400 profiles per condition), and Gaussian, flat-topped, and
+  Lorentzian features centered or a tenth of the profile length from the edge
+  (CNR 0.3 to 30, 200 profiles per condition). For a centered feature, the
+  rule acted only at CNR 3 and below, on about 1% of fits or fewer. The
+  refused fits whose sign was examined all had the wrong sign: a negative wing
+  under a positive peak, which could read a CNR of up to about 13. For a
+  feature a tenth of the profile length from the edge, it refused up to 2.5%
+  of fits, only at CNR 1 and below, with either sign.
+- Validation of the center rule, for a feature at the profile edge or outside
+  the data. It used the same three shapes and two profile lengths, with the
+  peak at the first sample, a quarter of the profile length before it, or a
+  fifth of the profile length after the end (CNR 0.3 to 30, 200 profiles per
+  condition). With the peak at the profile edge, the rule refused up to 18% of
+  fits at CNR 1 to 10 (up to 3.5% for a flat-topped feature), mostly fits of
+  the correct sign. At CNR 3 to 10 the refused fits were off by a median of 30%
+  or more, and the peak-method fallback by 10 to 25%. At CNR 1 both reads were
+  poor. With the peak outside the data, it refused at most 1.5% of fits for
+  Gaussian and flat-topped features, and up to 12.5% for a Lorentzian at CNR
+  10 to 30. In those Lorentzian cases both the fit and the fallback were off by
+  about 75 to 115%, because the peak is not in the data. At lower CNR the few
+  refused fits varied widely.
+
+### Documentation
+
+- README: the citation guidance asks for the concept DOI together with the
+  version used, instead of a per-release DOI.
+- README and quick start: a note on kinetic traces under "Amplitude
+  estimation". To follow a feature's amplitude across a series of profiles,
+  use the matched filter and read the signed `amplitude`. The note gives the
+  errors in fitted lifetimes for each amplitude method in simulation, and the
+  false floor of about 1.6 noise standard deviations in a trace built from
+  `cnr`.
 
 ## [0.3.3] - 2026-10-20
 
@@ -234,7 +346,8 @@ This release carries the citation metadata into the published artifact. Version
 - Initial release: FFT-based CNR estimation from single 1-D profiles, with an
   AIC-selected signal/noise frequency boundary and a 95% confidence interval.
 
-[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/thiebes/fft-cnr/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/thiebes/fft-cnr/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/thiebes/fft-cnr/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/thiebes/fft-cnr/compare/v0.3.0...v0.3.1
