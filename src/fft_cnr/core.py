@@ -59,7 +59,14 @@ class NoiseModel:
         unclipped intercept. Most samples sit near the baseline, so this
         anchors the fitted line where the data constrain it, not at zero
         signal, where a detector offset makes the true intercept negative.
-        Derived as ``gain * baseline + read**2`` when not given.
+        Derived as ``gain * baseline + read**2`` when not given. It is
+        unclipped, so when the true variance at the baseline is small against
+        its estimation error (a baseline near zero counts with a small read
+        floor) it is zero or negative on a sizeable share of profiles: the
+        floor variance is then not resolved from zero. Treat a non-positive
+        value as zero when forming a floor-referenced level, which makes the
+        floor-referenced CNR ``|amplitude| / sqrt(baseline_variance)`` of that
+        profile unbounded.
     """
 
     read: float
@@ -85,7 +92,9 @@ class NoiseModel:
         photon background and on a detector offset alike. A negative fitted
         gain is treated as zero, which gives the baseline value
         ``|amplitude| / sqrt(baseline_variance)``. Returns NaN when the model
-        predicts no noise at the extremum.
+        predicts no positive variance at the extremum, which can happen when
+        ``baseline_variance`` is not positive (a baseline near zero counts with
+        a small read floor) and the signal term does not lift it above zero.
 
         A feature that reaches the outer quarters of the profile raises the
         edge baseline and lowers the peak-path amplitude, so ``peak_snr``

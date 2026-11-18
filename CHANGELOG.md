@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the photon-transfer fit with its intercept unclipped. For a model built by
   hand it is derived as `gain * baseline + read**2`. Both fields follow the
   existing ones and have defaults, so construction by position still works,
-  and both are NaN when the noise-model fit is skipped.
+  and both are NaN when the noise-model fit is skipped. `baseline_variance` can
+  be zero or negative when the baseline is near zero counts and the read floor
+  is small; treat that as a floor variance of zero.
 - `scripts/compare_release_outputs.py`: runs a reference release's `core.py`,
   loaded from a git ref, beside the working tree on a fixed set of profiles and
   checks that every output is bit-identical.

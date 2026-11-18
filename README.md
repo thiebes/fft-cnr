@@ -276,6 +276,19 @@ feature and the amplitude reads low (see
 [Confidence intervals](#confidence-intervals)), and `peak_snr` reads low by
 about the same fraction.
 
+`model.baseline_variance` is an unclipped estimate. When the true variance at
+the baseline is small against its estimation error, it is zero or negative on
+a sizeable share of profiles, and the floor variance is then not resolved from
+zero. On a zero-background Poisson profile (peak of 25 or 100 photons, N=512,
+200 trials) this happened in 41% to 44% of profiles with no read noise, in 0%
+to 13% with a read noise of 1 count, and in none from 2 counts. Treat a
+non-positive value as zero when forming a floor-referenced level: the
+floor-referenced CNR, `abs(amplitude) / sqrt(model.baseline_variance)`, is then
+unbounded for that profile, and a level pooled over a series of profiles is the
+median of the clipped per-profile values. `peak_snr` returns NaN, without a
+warning, only if the variance at the extremum is also not positive; in the same
+trials that did not occur.
+
 When the gain is significant, the fitted variance also sets the intervals:
 `noise_ci95`, `amplitude_se` on the peak and matched-filter paths, and
 `cnr_ci95` use it in place of the single noise level, and
