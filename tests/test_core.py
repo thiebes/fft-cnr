@@ -1,5 +1,7 @@
 """Integration tests for FFT-based CNR estimation."""
 
+import dataclasses
+import warnings
 from unittest.mock import patch
 
 import numpy as np
@@ -850,45 +852,89 @@ class TestNoiseModel:
         result = fft_cnr(rng.normal(0, 1.0, 256))
         assert result.noise_model is None
 
-    def test_peak_snr_pure_shot_noise(self):
-        """With no read floor, peak SNR reduces to sqrt(amplitude / gain)."""
-        model = NoiseModel(
-            read=0.0,
-            gain=0.01,
+    @staticmethod
+    def _model(read, gain, baseline=0.0, baseline_variance=None):
+        return NoiseModel(
+            read=read,
+            gain=gain,
             spectral_exponent=float("nan"),
             white_floor=float("nan"),
-            signal_dependent=True,
+            signal_dependent=None,
             correlated=None,
+            baseline=baseline,
+            baseline_variance=baseline_variance,
         )
-        assert model.peak_snr(100.0) == pytest.approx(100.0)
+
+    def test_field_order_appends_baseline_fields(self):
+        """baseline and baseline_variance are appended last with defaults, so
+        a model built by position with the original six fields still
+        constructs, and its baseline variance follows from gain and read."""
+        names = [f.name for f in dataclasses.fields(NoiseModel)]
+        assert names == [
+            "read",
+            "gain",
+            "spectral_exponent",
+            "white_floor",
+            "signal_dependent",
+            "correlated",
+            "baseline",
+            "baseline_variance",
+        ]
+        model = NoiseModel(2.0, 0.5, float("nan"), float("nan"), False, None)
+        assert model.baseline == 0.0
+        assert model.baseline_variance == 4.0
+        assert self._model(read=2.0, gain=0.5, baseline=10.0).baseline_variance == 9.0
+
+    def test_peak_snr_pure_shot_noise(self):
+        """With no read floor and a zero baseline, peak SNR reduces to
+        sqrt(amplitude / gain)."""
+        assert self._model(read=0.0, gain=0.01).peak_snr(100.0) == pytest.approx(
+            100.0
+        )
 
     def test_peak_snr_pure_read_noise(self):
         """With zero gain, peak SNR reduces to amplitude / read."""
-        model = NoiseModel(
-            read=2.0,
-            gain=0.0,
-            spectral_exponent=float("nan"),
-            white_floor=float("nan"),
-            signal_dependent=False,
-            correlated=None,
-        )
-        assert model.peak_snr(10.0) == pytest.approx(5.0)
+        assert self._model(read=2.0, gain=0.0).peak_snr(10.0) == pytest.approx(5.0)
 
-    def test_peak_snr_negative_amplitude_uses_magnitude(self):
-        """A negative (dip / dark-contrast) amplitude must give the same finite,
-        positive SNR as a peak of equal depth, not a NaN from a negative
-        radicand. The peak amplitude read can return a signed value, and
-        peak_snr is documented as the recommended read on that path."""
-        model = NoiseModel(
-            read=0.0,
-            gain=0.01,
-            spectral_exponent=float("nan"),
-            white_floor=float("nan"),
-            signal_dependent=True,
-            correlated=None,
-        )
-        assert model.peak_snr(-100.0) == pytest.approx(model.peak_snr(100.0))
-        assert np.isfinite(model.peak_snr(-100.0))
+    def test_peak_snr_includes_baseline(self):
+        """The shot noise at the peak comes from the whole signal level there,
+        baseline plus amplitude, not from the amplitude alone."""
+        model = self._model(read=0.0, gain=1.0, baseline=100.0)
+        assert model.peak_snr(100.0) == pytest.approx(100.0 / np.sqrt(200.0))
+
+    def test_peak_snr_detector_offset(self):
+        """A detector offset raises the baseline without adding shot noise:
+        the variance at the baseline is the read floor, and the peak adds
+        only its own photons."""
+        model = self._model(read=2.0, gain=1.0, baseline=1000.0, baseline_variance=4.0)
+        assert model.peak_snr(100.0) == pytest.approx(100.0 / np.sqrt(104.0))
+
+    def test_peak_snr_dip_evaluated_at_its_bottom(self):
+        """A negative (dip / dark-contrast) amplitude is evaluated at the
+        bottom of the dip, where the signal level and its shot noise are
+        lowest, so a dip has a higher SNR than a peak of equal height on the
+        same baseline."""
+        model = self._model(read=0.0, gain=0.01, baseline=300.0)
+        assert model.peak_snr(-100.0) == pytest.approx(100.0 / np.sqrt(2.0))
+        assert model.peak_snr(100.0) == pytest.approx(50.0)
+
+    def test_peak_snr_negative_gain_gives_baseline_value(self):
+        """A negative fitted gain is treated as zero, giving the baseline
+        value, rather than driving the variance negative, which returned NaN
+        with a RuntimeWarning."""
+        model = self._model(read=1.0, gain=-0.5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert model.peak_snr(3.0) == pytest.approx(3.0)
+
+    def test_peak_snr_no_predicted_noise_is_nan(self):
+        """A dip deeper than the baseline's signal level, with no read floor,
+        leaves the model predicting no noise; that is reported as NaN, without
+        a warning."""
+        model = self._model(read=0.0, gain=0.01, baseline=0.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert np.isnan(model.peak_snr(-100.0))
 
 
 class TestNoiseModelDetection:
@@ -960,6 +1006,67 @@ class TestNoiseModelDetection:
         assert 7.0 < snr < 14.0
         assert result.cnr > 2.0 * snr
 
+    def test_baseline_is_peak_read_edge_level(self):
+        """baseline is the edge level the peak read subtracts: the mean of
+        the outer quarter of the samples at each end."""
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy, estimate_noise_model=True)
+        margin = noisy.size // 4
+        edge_level = np.mean(np.concatenate([noisy[:margin], noisy[-margin:]]))
+        assert result.noise_model.baseline == pytest.approx(edge_level, abs=1e-12)
+
+    def test_white_noise_baseline_variance_matches_noise_rms(self):
+        """Under white noise the fitted variance at the baseline and the
+        spectral noise estimate measure the same quantity."""
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy, estimate_noise_model=True)
+        assert result.noise_model.baseline_variance == pytest.approx(
+            result.noise_rms**2, rel=0.1
+        )
+
+    def test_peak_snr_detector_offset(self):
+        """Poisson photons (100 at the peak) on a 1000-count detector offset
+        with read noise 2: the offset carries no shot noise, so the fitted
+        intercept is negative and read clips to zero, while the variance at
+        the baseline stays near read**2 = 4 and peak_snr lands near
+        100 / sqrt(104). Medians over a fixed set of profiles, as in the
+        background test."""
+        N = 512
+        x = np.arange(N, dtype=float)
+        shape = np.exp(-0.5 * ((x - (N - 1) / 2.0) / 25.0) ** 2)
+        true_snr = 100.0 / np.sqrt(104.0)
+        snr_ratios = []
+        for seed in range(7):
+            rng = np.random.default_rng(seed)
+            counts = rng.poisson(100.0 * shape) + 1000.0 + rng.normal(0.0, 2.0, N)
+            result = fft_cnr(counts, estimate_noise_model=True)
+            model = result.noise_model
+            assert model.baseline == pytest.approx(1000.0, rel=0.01)
+            assert model.baseline_variance == pytest.approx(4.0, abs=2.0)
+            snr_ratios.append(model.peak_snr(result.amplitude) / true_snr)
+        assert np.median(snr_ratios) == pytest.approx(1.0, abs=0.15)
+
+    def test_peak_snr_on_background(self):
+        """A 100-photon Poisson peak on a 100-photon background: the noise at
+        the peak includes the background's shot noise, so peak_snr lands near
+        A / sqrt(b + A) = 7.07, not near A / sqrt(A) = 10. The level the
+        model is evaluated at is checked per profile; the SNR, which carries
+        the scatter of the fitted gain (about 15% per profile here), by the
+        median over a fixed set of profiles."""
+        N = 512
+        x = np.arange(N, dtype=float)
+        lam = 100.0 + 100.0 * np.exp(-0.5 * ((x - (N - 1) / 2.0) / 25.0) ** 2)
+        true_snr = 100.0 / np.sqrt(200.0)
+        snr_ratios = []
+        for seed in range(7):
+            counts = np.random.default_rng(seed).poisson(lam).astype(float)
+            result = fft_cnr(counts, estimate_noise_model=True)
+            model = result.noise_model
+            assert model.baseline == pytest.approx(100.0, rel=0.05)
+            assert model.baseline + result.amplitude == pytest.approx(200.0, rel=0.05)
+            snr_ratios.append(model.peak_snr(result.amplitude) / true_snr)
+        assert np.median(snr_ratios) == pytest.approx(1.0, abs=0.15)
+
     def test_deterministic_by_default(self):
         noisy, _ = self._white_noise_signal()
         a = fft_cnr(noisy, estimate_noise_model=True)
@@ -982,6 +1089,8 @@ class TestNoiseModelDetection:
         assert model.signal_dependent is None
         assert np.isnan(model.gain)
         assert np.isnan(model.read)
+        assert np.isnan(model.baseline)
+        assert np.isnan(model.baseline_variance)
         assert model.correlated is None
         assert np.isnan(model.spectral_exponent)
         assert np.isnan(model.white_floor)

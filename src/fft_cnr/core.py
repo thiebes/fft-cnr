@@ -28,14 +28,16 @@ class NoiseModel:
     characterize and correct correlated noise. White, signal-independent
     noise is the degenerate case of the real-space axis (zero gain).
 
-    Real-space numeric fields are NaN and ``signal_dependent`` is None until
-    the detector has run, so "not tested" is distinguishable from "tested,
-    not significant"; the spectral-axis fields stay at those sentinels.
+    Real-space numeric fields (``read``, ``gain``, ``baseline``,
+    ``baseline_variance``) are NaN and ``signal_dependent`` is None until the
+    detector has run, so "not tested" is distinguishable from "tested, not
+    significant"; the spectral-axis fields stay at those sentinels.
 
     Attributes
     ----------
     read : float
-        Read-noise floor (intercept of the var-vs-signal fit).
+        Read-noise floor: the square root of the var-vs-signal intercept,
+        clipped at zero.
     gain : float
         Photon-transfer slope (var-vs-signal).
     spectral_exponent : float
@@ -48,6 +50,16 @@ class NoiseModel:
     correlated : bool or None
         Reserved flag for a correlated-noise detector; always None
         (detection deferred, no single-frame correction).
+    baseline : float
+        Signal level of the profile's baseline: the mean of the outer
+        quarter of the samples at each end, the same edge level the peak
+        read subtracts. Defaults to 0 for a model built by hand.
+    baseline_variance : float
+        Fitted noise variance at ``baseline``: ``gain * baseline`` plus the
+        unclipped intercept. Most samples sit near the baseline, so this
+        anchors the fitted line where the data constrain it, not at zero
+        signal, where a detector offset makes the true intercept negative.
+        Derived as ``gain * baseline + read**2`` when not given.
     """
 
     read: float
@@ -56,15 +68,33 @@ class NoiseModel:
     white_floor: float
     signal_dependent: bool | None
     correlated: bool | None
+    baseline: float = 0.0
+    baseline_variance: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.baseline_variance is None:
+            self.baseline_variance = self.gain * self.baseline + self.read**2
 
     def peak_snr(self, amplitude: float) -> float:
         """Peak signal-to-noise ratio under the fitted real-space noise model.
 
-        Uses the amplitude magnitude, so a negative (absorption / dark-contrast)
-        amplitude gives the same positive SNR as a peak of equal depth.
+        The noise is the fitted line followed from the baseline to the
+        feature's extremum, ``baseline_variance + gain * amplitude`` with the
+        amplitude signed: a peak is evaluated at its top and a negative
+        (absorption / dark-contrast) feature at its bottom. This holds on a
+        photon background and on a detector offset alike. A negative fitted
+        gain is treated as zero, which gives the baseline value
+        ``|amplitude| / sqrt(baseline_variance)``. Returns NaN when the model
+        predicts no noise at the extremum.
+
+        A feature that reaches the outer quarters of the profile raises the
+        edge baseline and lowers the peak-path amplitude, so ``peak_snr``
+        reads low by about the amplitude's shortfall (see ``cnr_ci95``).
         """
-        a = abs(amplitude)
-        return float(a / np.sqrt(self.gain * a + self.read**2))
+        variance = self.baseline_variance + np.maximum(self.gain, 0.0) * amplitude
+        if not variance > 0:
+            return float("nan")
+        return float(abs(amplitude) / np.sqrt(variance))
 
 
 @dataclass
@@ -505,6 +535,8 @@ def _estimate_noise_model(
             white_floor=float("nan"),
             signal_dependent=None,
             correlated=None,
+            baseline=float("nan"),
+            baseline_variance=float("nan"),
         )
         reason = (
             "signal range too small relative to the noise to constrain "
@@ -534,6 +566,12 @@ def _estimate_noise_model(
         )
 
     p_value = float((1 + np.sum(null_gains >= gain)) / (_NOISE_MODEL_NULL_DRAWS + 1))
+    # The edge level the peak read subtracts (same margin and expression), and
+    # the fitted variance there with the intercept unclipped: the line is
+    # anchored where most samples sit, not extrapolated to zero signal.
+    margin = max(1, N // 4)
+    x_raw = decomp.x + decomp.x_mean
+    baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
     model = NoiseModel(
         read=float(np.sqrt(max(0.0, read2))),
         gain=gain,
@@ -541,6 +579,8 @@ def _estimate_noise_model(
         white_floor=float("nan"),
         signal_dependent=bool(p_value <= _NOISE_MODEL_TEST_LEVEL),
         correlated=None,
+        baseline=baseline,
+        baseline_variance=gain * baseline + read2,
     )
     return model, {"var_signal_p": p_value}
 
