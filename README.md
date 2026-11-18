@@ -149,6 +149,8 @@ Two alternatives are available:
   expected signal shape is available, a matched filter gives the most precise
   amplitude estimate and a calibrated standard error. This holds only when the
   template matches the true shape; a mismatched template biases the amplitude.
+  The amplitude is in units of the template's peak, so normalize the template
+  to a peak of 1 to read the amplitude, and the CNR, in signal units.
 
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
@@ -182,8 +184,8 @@ different quantities that are not comparable to it. Those paths still expose
 `amplitude_se` directly for callers that want the raw ratio.
 
 ```python
-# With a known template
-result = fft_cnr(noisy, template=signal)
+# With a known template, normalized to a peak of 1
+result = fft_cnr(noisy, template=signal / signal.max())
 
 # With a generalized Gaussian fit
 result = fft_cnr(noisy, fit_model="generalized_gaussian")
@@ -257,6 +259,35 @@ appears in `diagnostics["noise_model_skipped"]`). To judge significance, the
 package runs the whole estimation pipeline on about 200 simulated data sets, so
 the test accounts for the estimator's own artifacts. These extra runs cost
 roughly half a second at N=512.
+
+`peak_snr` evaluates the fitted variance at the feature's extremum. It starts
+from `model.baseline_variance`, the fitted variance at the profile's baseline,
+and adds `gain * amplitude` with the amplitude signed. `model.baseline` is the
+edge level that the peak read subtracts: the mean of the outer quarter of the
+samples at each end. Most samples sit near that level, so the fitted variance
+there is well constrained. A photon background therefore adds its shot noise to
+the noise at the peak, and a detector offset, which carries no shot noise, does
+not. A negative (absorption or dark-contrast) feature is evaluated at its
+bottom, where the signal-dependent noise is lowest. A negative fitted gain is
+treated as zero. The amplitude must be in signal units, which on the
+matched-filter path holds for a template with a peak of 1. When the feature
+reaches the outer quarters of the profile, the baseline includes part of the
+feature and the amplitude reads low (see
+[Confidence intervals](#confidence-intervals)), and `peak_snr` reads low by
+about the same fraction.
+
+`model.baseline_variance` is an unclipped estimate. When the true variance at
+the baseline is small against its estimation error, it is zero or negative on
+a sizeable share of profiles, and the floor variance is then not resolved from
+zero. On a zero-background Poisson profile (peak of 25 or 100 photons, N=512,
+200 trials) this happened in 41% to 44% of profiles with no read noise, in 0%
+to 13% with a read noise of 1 count, and in none from 2 counts. Treat a
+non-positive value as zero when forming a floor-referenced level: the
+floor-referenced CNR, `abs(amplitude) / sqrt(model.baseline_variance)`, is then
+unbounded for that profile, and a level pooled over a series of profiles is the
+median of the clipped per-profile values. `peak_snr` returns NaN, without a
+warning, only if the variance at the extremum is also not positive; in the same
+trials that did not occur.
 
 When the gain is significant, the fitted variance also sets the intervals:
 `noise_ci95`, `amplitude_se` on the peak and matched-filter paths, and
@@ -515,13 +546,21 @@ On white noise the false-positive rate is consistent with the 5% test level
 and the fitted parameters recover the truth. On Poisson data the test fired in
 all 100 trials at these conditions, the fitted gain is within 5% of the true
 value, and the derived peak SNR tracks the true peak signal-to-noise ratio
-(ratio 0.99 to 1.03 across N and CNR).
+(ratio 0.99 to 1.03 across N and CNR). For a 100-photon Poisson peak on a
+background of 0 to 100 photons, a 100-photon dip on 300, or a detector offset
+of 0 to 1000 counts with read noise 2, the median ratio stays within 0.99 to
+1.03 (200 trials each).
+
+Under a detector offset the fitted read floor clips at zero, so the fitted
+variance that sets the intervals is too large and the intervals are
+conservative: `amplitude_se` is 1.8 times the observed scatter at a 100-count
+offset and 4.3 times at 1000 counts. `cnr` itself is unaffected by an offset.
 
 ## Citation
 
 If you use fft-cnr in published work, please cite it with the concept DOI below,
 which always resolves to the latest release, and report the version you used
-(`pip install fft-cnr==0.4.0`).
+(`pip install fft-cnr==0.4.1`).
 
 > Joseph J. Thiebes. fft-cnr: FFT-based contrast-to-noise ratio estimation from
 > a single frame. Zenodo. https://doi.org/10.5281/zenodo.20691435
@@ -530,7 +569,7 @@ which always resolves to the latest release, and report the version you used
 @software{thiebes_fft_cnr,
   author    = {Thiebes, Joseph J.},
   title     = {fft-cnr: FFT-based contrast-to-noise ratio estimation from a single frame},
-  version   = {0.4.0},
+  version   = {0.4.1},
   year      = {2026},
   publisher = {Zenodo},
   doi       = {10.5281/zenodo.20691435},

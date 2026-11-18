@@ -5,6 +5,66 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-11-18
+
+### Added
+
+- `NoiseModel.baseline`: the signal level of the profile's baseline, the edge
+  level the peak read subtracts (the mean of the outer quarter of the samples
+  at each end).
+- `NoiseModel.baseline_variance`: the fitted noise variance at that level, from
+  the photon-transfer fit with its intercept unclipped. For a model built by
+  hand it is derived as `gain * baseline + read**2`. Both fields follow the
+  existing ones and have defaults, so construction by position still works,
+  and both are NaN when the noise-model fit is skipped. `baseline_variance` can
+  be zero or negative when the baseline is near zero counts and the read floor
+  is small; treat that as a floor variance of zero.
+- `scripts/compare_release_outputs.py`: runs a reference release's `core.py`,
+  loaded from a git ref, beside the working tree on a fixed set of profiles and
+  checks that every output is bit-identical.
+
+### Changed
+
+- `NoiseModel.peak_snr(amplitude)` computes the variance at the feature's
+  extremum as `baseline_variance + gain * amplitude`. It evaluated the fitted
+  relation at the signal level `|amplitude|`, which leaves out the baseline: on
+  a photon background it read high. For a 100-photon Poisson peak it read 14%
+  above the true peak SNR on a 25-photon background and 34% above on 100
+  photons. Anchoring the variance at the baseline also keeps a detector offset,
+  which carries no shot noise, out of the noise at the peak.
+- Behavior change for negative features: `peak_snr` evaluates a dip at its
+  bottom, so `peak_snr(-A)` no longer equals `peak_snr(A)` on a nonzero
+  baseline. The test that pinned the symmetry is replaced by one for a dip on a
+  background.
+- `peak_snr` treats a negative fitted gain as zero. This changes its value on
+  white-noise profiles whose fitted gain is negative, where it read high. On a
+  zero baseline, `baseline_variance` uses the signed intercept where `read` is
+  clipped at zero, so `peak_snr` values there can move slightly.
+
+### Fixed
+
+- `peak_snr` returned NaN with a RuntimeWarning when a negative fitted gain made
+  the variance negative. It returns NaN, without a warning, only when the model
+  predicts no positive variance at the extremum.
+
+### Documentation
+
+- The README and quick-start matched-filter examples passed the noise-free
+  signal as the template, which made the amplitude and the CNR read about 1
+  instead of 10: the matched-filter amplitude is in units of the template's
+  peak. The examples normalize the template to a peak of 1, and the README
+  states the convention.
+
+No other output changes: `cnr`, the intervals, the diagnostics, and the fitted
+`gain`, `read`, and `var_signal_p` are bit-identical to 0.4.0, as checked by
+`scripts/compare_release_outputs.py`.
+
+Known limit, unchanged from 0.4.0: when `estimate_noise_model` finds
+signal-dependent noise on data with a detector offset, the intervals use the
+fitted variance with the read floor clipped at zero, which overstates it. The
+intervals are then conservative (`amplitude_se` 1.8 times the observed scatter
+at a 100-count offset, 4.3 times at 1000 counts). `cnr` is unaffected.
+
 ## [0.4.0] - 2026-11-17
 
 ### Added
@@ -347,6 +407,7 @@ This release carries the citation metadata into the published artifact. Version
   AIC-selected signal/noise frequency boundary and a 95% confidence interval.
 
 [Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.4.0...HEAD
+[0.4.1]: https://github.com/thiebes/fft-cnr/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/thiebes/fft-cnr/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/thiebes/fft-cnr/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/thiebes/fft-cnr/compare/v0.3.1...v0.3.2
