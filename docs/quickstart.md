@@ -38,8 +38,9 @@ edge-estimated baseline, which works for any profile shape. Two alternatives are
 available through {func}`~fft_cnr.fft_cnr`:
 
 ```python
-# With a known noise-free template (matched filter, most precise)
-result = fft_cnr(noisy, template=signal)
+# With a known noise-free template (matched filter, most precise),
+# normalized to a peak of 1 so the amplitude is in signal units
+result = fft_cnr(noisy, template=signal / signal.max())
 
 # With a generalized Gaussian fit (when shape parameters are also wanted)
 result = fft_cnr(noisy, fit_model="generalized_gaussian")

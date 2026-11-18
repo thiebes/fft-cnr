@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the variance negative. It returns NaN, without a warning, only when the model
   predicts no positive variance at the extremum.
 
+### Documentation
+
+- The README and quick-start matched-filter examples passed the noise-free
+  signal as the template, which made the amplitude and the CNR read about 1
+  instead of 10: the matched-filter amplitude is in units of the template's
+  peak. The examples normalize the template to a peak of 1, and the README
+  states the convention.
+
 No other output changes: `cnr`, the intervals, the diagnostics, and the fitted
 `gain`, `read`, and `var_signal_p` are bit-identical to 0.4.0, as checked by
 `scripts/compare_release_outputs.py`.

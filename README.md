@@ -149,6 +149,8 @@ Two alternatives are available:
   expected signal shape is available, a matched filter gives the most precise
   amplitude estimate and a calibrated standard error. This holds only when the
   template matches the true shape; a mismatched template biases the amplitude.
+  The amplitude is in units of the template's peak, so normalize the template
+  to a peak of 1 to read the amplitude, and the CNR, in signal units.
 
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
@@ -182,8 +184,8 @@ different quantities that are not comparable to it. Those paths still expose
 `amplitude_se` directly for callers that want the raw ratio.
 
 ```python
-# With a known template
-result = fft_cnr(noisy, template=signal)
+# With a known template, normalized to a peak of 1
+result = fft_cnr(noisy, template=signal / signal.max())
 
 # With a generalized Gaussian fit
 result = fft_cnr(noisy, fit_model="generalized_gaussian")
