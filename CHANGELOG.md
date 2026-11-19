@@ -34,7 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A generalized-Gaussian result changes only where the second start reaches a
-  lower residual; elsewhere it is bit-identical to 0.4.1. The peak path, the
+  lower residual; elsewhere it is bit-identical to 0.4.1. Where the second
+  start changes whether the fit is kept or falls back, `amplitude_method`
+  changes with it, and so does `diagnostics["amplitude_sign_ambiguous"]`,
+  which is computed on the peak read and is False on a kept fit. The peak path, the
   matched filter, `noise_rms`, the intervals of those paths, and the noise
   model are bit-identical to 0.4.1. With `scripts/compare_release_outputs.py
   --ref v0.4.1 --allow-fit-changes`, 752 peak-path and 724 matched-filter runs
