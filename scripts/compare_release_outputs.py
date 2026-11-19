@@ -1,19 +1,27 @@
 """Check that fft_cnr outputs are bit-identical to a reference release.
 
-Loads ``src/fft_cnr/core.py`` at a git ref (default ``v0.4.0``) beside the
+Loads ``src/fft_cnr/core.py`` at a git ref (default ``v0.4.1``) beside the
 working-tree package and runs both on a fixed set of profiles, with and
-without ``estimate_noise_model``. Every ``CNREstimate`` field and property and
-every ``NoiseModel`` field that the reference defines must match bit for bit.
-Fields that only the working tree defines are listed, not compared, and
-``peak_snr`` is reported per profile for information. Exits 1 on any
-difference.
+without ``estimate_noise_model``, and on a seeded batch of profiles (centred
+Gaussians in records of +/-1.5 to +/-4 standard deviations, and in long
+records) on the peak, matched-filter, and generalized-Gaussian paths. Every
+``CNREstimate`` field and property and every ``NoiseModel`` field that the
+reference defines must match bit for bit. Fields that only the working tree
+defines are listed, not compared, and ``peak_snr`` is reported per profile for
+information. Exits 1 on any difference.
+
+With ``--allow-fit-changes``, a generalized-Gaussian run may differ when the
+working tree's fit reaches a strictly lower sum of squared residuals than the
+reference's fit on the same profile (the second start of 0.4.2). Every other
+difference still fails, and the counts of identical and changed runs are
+reported.
 
 Both versions run in one interpreter, so they share numpy and scipy and only
 the package code differs.
 
 Usage:
     uv run python scripts/compare_release_outputs.py
-    uv run python scripts/compare_release_outputs.py --ref v0.4.0
+    uv run python scripts/compare_release_outputs.py --ref v0.4.1 --allow-fit-changes
 """
 
 import argparse
@@ -73,12 +81,12 @@ def _cases():
     shot = _poisson_profile(512, 25.0, 100.0, 25.0, 8)
     shot_dip = _poisson_profile(512, 300.0, -100.0, 25.0, 10)
     unit_gaussian = np.exp(-0.5 * ((np.arange(512) - 255.5) / 25.0) ** 2)
-    return [
+    filling = _record_profiles(32, 2.5, 8.0, 2026, 4)[3]
+    peak_path_cases = [
         ("Gaussian", gaussian, {}),
         ("Gaussian, hann window", gaussian, {"window": "hann"}),
         ("Gaussian, no window", gaussian, {"window": "none"}),
         ("Gaussian, matched filter", gaussian, {"template": gaussian_clean}),
-        ("Gaussian, generalized-Gaussian fit", gaussian, {"fit_model": "generalized_gaussian"}),
         ("Gaussian, explicit roi", gaussian, {"roi": (128, 384)}),
         ("Gaussian, roi auto", gaussian, {"roi": "auto"}),
         ("Gaussian, bandpassed noise", gaussian, {"return_bandpassed_noise": True}),
@@ -92,7 +100,44 @@ def _cases():
         ("Poisson on background", shot, {}),
         ("Poisson on background, matched filter", shot, {"template": unit_gaussian}),
         ("Poisson dip on background", shot_dip, {}),
+        ("feature filling the record (+/-2.5 SD)", filling, {}),
     ]
+    fit_cases = [
+        (f"{label}, generalized-Gaussian fit", profile, {"fit_model": "generalized_gaussian"})
+        for label, profile, kwargs in peak_path_cases
+        if not kwargs
+    ]
+    fit_cases.append(
+        ("dip filling the record, generalized-Gaussian fit", -filling,
+         {"fit_model": "generalized_gaussian"})
+    )
+    return peak_path_cases + fit_cases
+
+
+def _record_profiles(N, half_width_sds, cnr, seed, n_profiles):
+    """Centred Gaussians (peak 1, zero baseline) in a record of +/-``half_width_sds``
+    standard deviations, in white noise of SD 1 / ``cnr``."""
+    x = np.arange(N, dtype=float)
+    sigma = N / (2.0 * half_width_sds)
+    feature = np.exp(-0.5 * ((x - (N - 1) / 2.0) / sigma) ** 2)
+    noise = np.random.default_rng(seed).normal(0, 1.0 / cnr, (n_profiles, N))
+    return feature + noise
+
+
+def _batch_cases(n_profiles):
+    """Seeded (label, profile, kwargs) runs on the peak, matched-filter, and
+    generalized-Gaussian paths: records of +/-1.5 to +/-4 SD at N = 32, and a
+    Gaussian of SD 25 in a record of 512 samples."""
+    records = [(32, k, cnr) for k in (1.5, 2.0, 2.5, 3.0, 4.0) for cnr in (5.0, 13.0, 34.0)]
+    records += [(512, 512 / 50.0, cnr) for cnr in (2.0, 5.0, 20.0)]
+    for i, (N, k, cnr) in enumerate(records):
+        x = np.arange(N, dtype=float)
+        template = np.exp(-0.5 * ((x - (N - 1) / 2.0) / (N / (2.0 * k))) ** 2)
+        for j, profile in enumerate(_record_profiles(N, k, cnr, [41, i], n_profiles)):
+            label = f"batch N {N} +/-{k:g} SD CNR {cnr:g} #{j}"
+            yield label, profile, {}
+            yield label, profile, {"template": template}
+            yield label, profile, {"fit_model": "generalized_gaussian"}
 
 
 def _bits_equal(a, b):
@@ -148,6 +193,37 @@ def _added_noise_model_fields(reference_core):
     ]
 
 
+def _fit_ssr(core_module, profile):
+    """Sum of squared residuals of a release's generalized-Gaussian fit to the
+    profile, as fft_cnr fits it with default options (inf if the fit fails).
+    Releases up to 0.4.1 take the profile only; 0.4.2 also takes the peak read."""
+    d = core_module._spectral_decomposition(
+        profile, window="tukey", tukey_alpha=0.25, welch_nperseg=None,
+        welch_noverlap=None, cutoff_guard=(0.05, 0.5), fallback_cut_frac=0.25,
+    )
+    x_raw = d.x + d.x_mean
+    fit = core_module._fit_generalized_gaussian_amplitude
+    if len(inspect.signature(fit).parameters) == 1:
+        _, _, params = fit(x_raw)
+    else:
+        baseline, excursion, idx = core_module._peak_read(x_raw, d.x_lp + d.x_mean)
+        _, _, params = fit(x_raw, (float(excursion[idx]), idx, baseline))
+    if not params:
+        return np.inf
+    grid = np.arange(x_raw.size, dtype=float)
+    z = np.abs((grid - params["center"]) / params["sigma"])
+    model = params["amplitude"] * np.exp(-0.5 * z ** params["shape"]) + params["baseline"]
+    return float(np.sum((x_raw - model) ** 2))
+
+
+def _fit_change_is_lower_residual(reference_core, profile, kwargs):
+    """True when a differing generalized-Gaussian run comes from a working-tree
+    fit with a strictly lower sum of squared residuals than the reference's."""
+    if set(kwargs) != {"fit_model"}:
+        return False
+    return _fit_ssr(candidate, profile) < _fit_ssr(reference_core, profile)
+
+
 def _peak_snr(result):
     if result.noise_model is None:
         return float("nan")
@@ -156,9 +232,37 @@ def _peak_snr(result):
         return result.noise_model.peak_snr(result.amplitude)
 
 
+def _path_name(kwargs):
+    if "template" in kwargs:
+        return "matched filter"
+    if kwargs.get("fit_model") == "generalized_gaussian":
+        return "generalized Gaussian"
+    return "peak and options"
+
+
+def _compare_run(reference_core, profile, kwargs, reference, result, allow_fit_changes):
+    """'identical', 'lower residual' (an accepted fit change), or 'fail'."""
+    if not _differing_attributes(reference, result):
+        return "identical"
+    if allow_fit_changes and _fit_change_is_lower_residual(reference_core, profile, kwargs):
+        return "lower residual"
+    return "fail"
+
+
+def _record_outcome(path_to_counts, kwargs, outcome):
+    counts = path_to_counts.setdefault(
+        _path_name(kwargs), {"identical": 0, "lower residual": 0, "fail": 0}
+    )
+    counts[outcome] += 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--ref", default="v0.4.0", help="git ref of the reference release")
+    parser.add_argument("--ref", default="v0.4.1", help="git ref of the reference release")
+    parser.add_argument("--allow-fit-changes", action="store_true",
+                        help="accept generalized-Gaussian differences from a lower-residual fit")
+    parser.add_argument("--batch", type=int, default=40,
+                        help="profiles per seeded batch cell (0 skips the batch)")
     args = parser.parse_args()
 
     reference_core = _load_reference_core(args.ref)
@@ -169,6 +273,7 @@ def main():
           f"{'peak_snr ref':>13} {'peak_snr new':>13}")
 
     failures = 0
+    path_to_counts = {}
     for label, profile, kwargs in _cases():
         for estimate_noise_model in (False, True):
             reference = reference_core.fft_cnr(
@@ -177,9 +282,13 @@ def main():
             result = candidate.fft_cnr(
                 profile, estimate_noise_model=estimate_noise_model, **kwargs
             )
+            outcome = _compare_run(reference_core, profile, kwargs, reference, result,
+                                   args.allow_fit_changes)
+            failures += outcome == "fail"
+            _record_outcome(path_to_counts, kwargs, outcome)
             differing = _differing_attributes(reference, result)
-            failures += bool(differing)
-            status = "identical" if not differing else "DIFFER: " + ", ".join(differing)
+            status = {"identical": "identical", "lower residual": "CHANGED (lower residual)",
+                      "fail": "DIFFER: " + ", ".join(differing)}[outcome]
             snr_columns = (
                 f"{_peak_snr(reference):>13.4f} {_peak_snr(result):>13.4f}"
                 if estimate_noise_model
@@ -187,11 +296,33 @@ def main():
             )
             print(f"{label:<40} {str(estimate_noise_model):>11} {status:>10} {snr_columns}")
 
+    batch_failures = []
+    for label, profile, kwargs in _batch_cases(args.batch) if args.batch else ():
+        reference = reference_core.fft_cnr(profile, **kwargs)
+        result = candidate.fft_cnr(profile, **kwargs)
+        outcome = _compare_run(reference_core, profile, kwargs, reference, result,
+                               args.allow_fit_changes)
+        _record_outcome(path_to_counts, kwargs, outcome)
+        if outcome == "fail":
+            batch_failures.append(f"{label} ({_path_name(kwargs)})")
+    failures += len(batch_failures)
+    for line in batch_failures:
+        print(f"DIFFER: {line}")
+
+    print()
+    print(f"{'path':<24} {'identical':>10} {'changed, lower residual':>24} {'failed':>8}")
+    for path, counts in path_to_counts.items():
+        print(f"{path:<24} {counts['identical']:>10} {counts['lower residual']:>24} "
+              f"{counts['fail']:>8}")
     print()
     if failures:
         print(f"{failures} run(s) differ from {args.ref}.")
         sys.exit(1)
-    print(f"All runs bit-identical to {args.ref} apart from the added fields and peak_snr.")
+    if any(counts["lower residual"] for counts in path_to_counts.values()):
+        print(f"All runs bit-identical to {args.ref} apart from the added fields, peak_snr, "
+              f"and generalized-Gaussian fits with a lower residual.")
+    else:
+        print(f"All runs bit-identical to {args.ref} apart from the added fields and peak_snr.")
 
 
 if __name__ == "__main__":

@@ -140,8 +140,10 @@ is underestimated, independent of the noise. The profile therefore needs to
 extend well beyond the feature: for a Gaussian, a profile 2.7 full widths at
 half maximum (FWHM) long reads the amplitude about 8.5% low, 4.1 FWHM about 1%
 low, and 5.4 FWHM within 0.1%. When the profile cannot be made longer, the
-matched filter and the generalized Gaussian fit do not use this baseline margin
-and are unaffected.
+matched filter does not use this baseline margin and is unaffected. The
+generalized Gaussian fit does not use it either, but it still needs the record
+to extend beyond most of the feature; [Profile length](#profile-length) gives
+the record width each method needs.
 
 Two alternatives are available:
 
@@ -155,7 +157,13 @@ Two alternatives are available:
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
   to flat-topped. Useful when fitted parameters (center, width, shape) are
-  needed in addition to CNR. The fit can degenerate, most often on
+  needed in addition to CNR. The fit runs from two starting points and keeps
+  the one with the lower sum of squared residuals: the sample farthest from the
+  profile's median, and the peak read of the default method (the largest
+  excursion of the smoothed profile from the edge baseline, with its sign). The
+  second start keeps the fit from converging to a dip of the wrong sign at an
+  edge when the feature fills most of the record, where the median lies on the
+  feature. The fit can still degenerate, most often on
   noise-dominated profiles, for example into a flat-topped model as wide as the
   profile whose amplitude and baseline cancel. The fit is refused at any CNR if
   its amplitude exceeds twice the data's peak-to-peak range, its width is
@@ -173,7 +181,7 @@ Two alternatives are available:
   generalized-Gaussian CNR far above the peak-method value on a noisy profile
   with caution. Its amplitude standard error comes from the fit covariance,
   which understates the scatter near CNR 2, so the CNR interval on this path
-  covers about 0.8 there (see [Confidence intervals](#confidence-intervals)).
+  covers about 0.92 there (see [Confidence intervals](#confidence-intervals)).
 
 The `result.amplitude_snr` property reports the matched-filter signal-to-noise
 ratio (amplitude over its standard error). A larger value means the amplitude
@@ -206,8 +214,8 @@ the feature is weak but still present (about 0.5 to 3 noise standard
 deviations), the peak method reads high. The magnitude of the peak amplitude,
 `cnr * noise_rms`, averages about 1.6 noise standard deviations on a profile
 with no feature, so a trace built from `cnr` stops decaying at a false floor.
-The generalized Gaussian fit follows a strong decaying feature, but it reads a
-weak long-lived component short.
+The generalized Gaussian fit follows both a strong decaying feature and a weak
+long-lived component to within a few percent.
 
 These statements come from a simulation of a Gaussian band (standard deviation
 about 77 points in a 1024-point spectrum) that decays over 81 delays in white
@@ -220,12 +228,12 @@ the fast lifetime.
 | ------------------------- | ------------------------- | ------------------------- |
 | Matched filter | within 0.1% | within 0.6% |
 | Peak method, `amplitude` | 6.7% / 2.4% long | 71% / 56% long |
-| Generalized Gaussian fit | 3.2% / 0.8% short | 46% / 35% short |
+| Generalized Gaussian fit | within 0.2% | 3.4% short / 1.3% long |
 
 A single-exponential fit with a constant offset to the magnitude trace returns
 a false offset of 15% of the initial amplitude at an initial CNR of 10 and 7%
 at 20. On profiles where the band has decayed, the generalized Gaussian fit
-falls back to the peak method in 5% to 7% of cases.
+falls back to the peak method in about 3% of cases.
 
 ## Noise model detection
 
@@ -424,7 +432,7 @@ Median estimated-to-true CNR ratio at N=512, by amplitude method:
 | Gaussian | 1.00--1.03 | 1.00--1.01 | 1.00--1.01 |
 | Heavy-tailed (p=1.5) | 0.97--1.00 | 0.99--1.01 | 0.98--1.00 |
 | Flat-topped (p=4) | 0.93--1.10 | 0.93--1.01 | 0.92--1.00 |
-| Gaussian mixture | 0.99--1.01 | 1.12--1.16 | 0.99--1.00 |
+| Gaussian mixture | 0.99--1.01 | 1.12--1.17 | 0.99--1.00 |
 | Lorentzian | 0.98--1.01 | 1.06--1.09 | 0.99--1.00 |
 
 The peak method stays within 3% of the true CNR for most shapes from CNR=5
@@ -439,7 +447,7 @@ CNR rises (for p=4 and sigma=20 samples, 2% high at CNR=50, 8% at CNR=100, and
 `lowfreq_dominated` flag does not fire; a diagnostic for this case is tracked
 in issue #15). A wider feature of the same shape leaks less and holds its
 accuracy to higher CNR. The generalized Gaussian fit is accurate when the
-signal is in the model family but introduces 6--16% positive bias on shapes
+signal is in the model family but introduces 6--17% positive bias on shapes
 outside it (Gaussian mixture, Lorentzian). The matched filter tracks the true
 CNR to within 2% when the template matches the signal shape.
 
@@ -470,6 +478,19 @@ the CNR reads 0.95 (matched filter), 0.96 (generalized Gaussian), and 0.92
 (peak, whose amplitude also reads a few percent low on short records) of the
 true value.
 
+Narrower records cut into the feature itself. For a centred Gaussian in a
+record of +/-k standard deviations (records of 16 to 52 points, 1800 profiles
+per condition, `scripts/validate_record_width.py`), the generalized Gaussian
+fit reads the median CNR within 3% of the simulated value down to k = 2.5 from
+CNR=5, and down to k = 2 from CNR=13. Below that the fit cannot separate
+amplitude, baseline, and shape. More fits run away into a flat top as wide as
+the record and are refused, and the refused fits fall back to the peak method.
+At k = 1.5 the median reads 0.63 to 0.81 of the simulated value from CNR=5 to
+34, and 20% to 35% of fits are refused. The peak method reads its edge baseline
+on the feature's tails whenever k is below about 4: its noiseless read is 0.97,
+0.94, 0.89, 0.80, 0.66, and 0.47 of the true amplitude at k = 4, 3.5, 3, 2.5,
+2, and 1.5 (issue #37). The matched filter does not use the baseline margin.
+
 ### Precision
 
 Trial-to-trial scatter (relative standard deviation) scales as roughly
@@ -494,7 +515,7 @@ independent terms; its coverage and median width (relative to the true CNR) are:
 | Method | CNR=2 | CNR=5 | CNR=10--100 | Width at CNR=20 (N=256 / 512) |
 | -------------- | ----------- | ----------- | ----------- | ----------------------------- |
 | Peak | 0.91--0.93 | 0.94--0.95 | 0.94--0.95 | 0.22 / 0.15 |
-| Gen. Gaussian | 0.79--0.82 | 0.94--0.95 | 0.94--0.95 | 0.21 / 0.15 |
+| Gen. Gaussian | 0.92--0.93 | 0.94--0.95 | 0.94--0.95 | 0.21 / 0.15 |
 | Matched filter | 0.95 | 0.95 | 0.95 | 0.21 / 0.14 |
 
 The reported standard errors match the trial-to-trial scatter: their ratio is
@@ -503,7 +524,8 @@ amplitude on the peak and matched-filter methods. Two limits remain. On the
 peak method at CNR=2 the maximum of the noisy reconstruction biases the CNR
 10--19% high, which no standard error can absorb; below CNR=3 the matched
 filter is the better choice. On the generalized-Gaussian method at CNR=2 the
-fit covariance understates the amplitude scatter.
+fit covariance understates the amplitude scatter (their ratio is 0.82 to 0.83),
+so the interval covers 0.92 to 0.93 instead of 0.95.
 
 These figures are for a feature centered in the profile. On the peak method the
 interval also assumes that the feature has decayed within the outer quarters of
@@ -560,7 +582,7 @@ offset and 4.3 times at 1000 counts. `cnr` itself is unaffected by an offset.
 
 If you use fft-cnr in published work, please cite it with the concept DOI below,
 which always resolves to the latest release, and report the version you used
-(`pip install fft-cnr==0.4.1`).
+(`pip install fft-cnr==0.4.2`).
 
 > Joseph J. Thiebes. fft-cnr: FFT-based contrast-to-noise ratio estimation from
 > a single frame. Zenodo. https://doi.org/10.5281/zenodo.20691435
@@ -569,7 +591,7 @@ which always resolves to the latest release, and report the version you used
 @software{thiebes_fft_cnr,
   author    = {Thiebes, Joseph J.},
   title     = {fft-cnr: FFT-based contrast-to-noise ratio estimation from a single frame},
-  version   = {0.4.1},
+  version   = {0.4.2},
   year      = {2026},
   publisher = {Zenodo},
   doi       = {10.5281/zenodo.20691435},
