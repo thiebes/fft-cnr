@@ -80,6 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record. "Profile length" gives the record width each method needs.
 - README "Confidence intervals" and "Bias": the generalized-Gaussian coverage
   at CNR=2 and the Gaussian-mixture bias range.
+- README "Kinetic traces", rerun on this release with the same simulation and
+  seeds: with the generalized Gaussian fit, the single-exponential lifetime
+  error goes from 3.2% / 0.8% short to within 0.2% at an initial CNR of 10 /
+  20, and the long-lived lifetime error from 46% / 35% short to 3.4% short /
+  1.3% long. On profiles where the band has decayed, the fit falls back to the
+  peak method in about 3% of cases instead of 5% to 7%. The matched-filter and
+  peak-method figures are unchanged.
 
 ## [0.4.1] - 2026-11-18
 

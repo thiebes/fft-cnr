@@ -214,8 +214,8 @@ the feature is weak but still present (about 0.5 to 3 noise standard
 deviations), the peak method reads high. The magnitude of the peak amplitude,
 `cnr * noise_rms`, averages about 1.6 noise standard deviations on a profile
 with no feature, so a trace built from `cnr` stops decaying at a false floor.
-The generalized Gaussian fit follows a strong decaying feature, but it reads a
-weak long-lived component short.
+The generalized Gaussian fit follows both a strong decaying feature and a weak
+long-lived component to within a few percent.
 
 These statements come from a simulation of a Gaussian band (standard deviation
 about 77 points in a 1024-point spectrum) that decays over 81 delays in white
@@ -228,12 +228,12 @@ the fast lifetime.
 | ------------------------- | ------------------------- | ------------------------- |
 | Matched filter | within 0.1% | within 0.6% |
 | Peak method, `amplitude` | 6.7% / 2.4% long | 71% / 56% long |
-| Generalized Gaussian fit | 3.2% / 0.8% short | 46% / 35% short |
+| Generalized Gaussian fit | within 0.2% | 3.4% short / 1.3% long |
 
 A single-exponential fit with a constant offset to the magnitude trace returns
 a false offset of 15% of the initial amplitude at an initial CNR of 10 and 7%
 at 20. On profiles where the band has decayed, the generalized Gaussian fit
-falls back to the peak method in 5% to 7% of cases.
+falls back to the peak method in about 3% of cases.
 
 ## Noise model detection
 
