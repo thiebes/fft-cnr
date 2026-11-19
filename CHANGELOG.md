@@ -5,6 +5,79 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-11-19
+
+### Fixed
+
+- The generalized-Gaussian fit (`fit_model="generalized_gaussian"`) returned a
+  fit of the wrong sign, which read about half the CNR, when the feature filled
+  most of the record (#41). The fit started only from the sample farthest from
+  the profile's median. When the feature fills the record the median lies on
+  the feature and that sample is an edge, so the fit could converge to a dip of
+  the wrong sign at the edge, a local minimum, and the degenerate-fit screen
+  kept it. For a centred Gaussian in a record of +/-2 standard deviations (SD),
+  19% to 35% of profiles at CNR 5 to 34 returned such a fit. The fit now also
+  starts from the peak read (the largest excursion of the low-pass
+  reconstruction from the edge baseline, at its location, with the baseline at
+  the edge level) and keeps the fit with the lower sum of squared residuals.
+  The screen and the fallback to the peak method are unchanged.
+- With the fix, in simulation (`scripts/validate_record_width.py`), no kept fit
+  has the wrong sign on records of +/-2 to +/-4 SD at CNR 5 to 34, nor at
+  +/-1.5 SD from CNR 8 (0.7% at CNR 5). The median CNR stays within 3% of the
+  simulated value down to +/-2.5 SD from CNR 5 and down to +/-2 SD from CNR 13;
+  0.4.1 needed about +/-3 SD. Below +/-2 SD the
+  fit cannot separate amplitude, baseline, and shape: more fits run away into a
+  flat top as wide as the record, are refused, and fall back to the peak
+  method, which reads low there (#37). A record of +/-1.5 SD stays unusable on
+  both paths.
+
+### Changed
+
+- A generalized-Gaussian result changes only where the second start reaches a
+  lower residual; elsewhere it is bit-identical to 0.4.1. The peak path, the
+  matched filter, `noise_rms`, the intervals of those paths, and the noise
+  model are bit-identical to 0.4.1. With `scripts/compare_release_outputs.py
+  --ref v0.4.1 --allow-fit-changes`, 752 peak-path and 724 matched-filter runs
+  are identical, and of 744 generalized-Gaussian runs 470 are identical and 274
+  change, each to a fit with a lower residual.
+- The changes concentrate on records narrower than about +/-3 SD and at low
+  CNR. On the README interval cells (centred Gaussian, N = 256 and 512, and the
+  +/-4 SD records of 28 to 52 samples), no profile changes by more than 1% from
+  CNR 10, and at CNR 5 only 0% to 4.3% do. At CNR 2, 13.5% to 37% change, and
+  the generalized-Gaussian CNR interval at N = 256 and 512 covers 0.92 to 0.93
+  instead of 0.79 to 0.82 (2000 trials). In the README bias table the
+  generalized-Gaussian range for the Gaussian mixture moves from 1.12--1.16 to
+  1.12--1.17 (1.164 to 1.170 at CNR 3); no other entry changes. On flat-topped features (p = 8 and 12) at most 2 of
+  200 profiles per condition change from CNR 3, and 36% to 44% at CNR 1, where
+  the interval coverage rises from about 0.70 to 0.93 to 0.95.
+- Two costs. The generalized-Gaussian path runs a second fit, so its run time
+  roughly doubles on long records. And on records of 32 and 52 samples with no
+  feature, fits that 0.4.1 refused are kept more often, so the median CNR read
+  on pure noise rises by 0.15 to 0.2; the share reading a CNR above 3 rises by
+  less than 0.01 and the share above 5 does not change.
+- `scripts/compare_release_outputs.py` compares against `v0.4.1` by default,
+  runs every profile on the generalized-Gaussian path too, adds a seeded batch
+  of record widths and long records, and accepts a generalized-Gaussian
+  difference with `--allow-fit-changes` only when the working tree's fit has a
+  lower sum of squared residuals.
+- The test of a real profile refused by the center rule uses a different seed:
+  on the earlier frame the second start finds a better fit inside the record.
+
+### Added
+
+- `scripts/validate_record_width.py`: wrong-sign share, median CNR, and
+  fallback share of the generalized-Gaussian path, and the peak path's median
+  against its noiseless prediction, for a centred Gaussian in records of +/-1.5
+  to +/-4 SD.
+
+### Documentation
+
+- README "Amplitude estimation": the generalized Gaussian fit is described with
+  its two starting points, and it is no longer said to be unaffected by a short
+  record. "Profile length" gives the record width each method needs.
+- README "Confidence intervals" and "Bias": the generalized-Gaussian coverage
+  at CNR=2 and the Gaussian-mixture bias range.
+
 ## [0.4.1] - 2026-11-18
 
 ### Added

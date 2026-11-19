@@ -229,6 +229,94 @@ class TestGeneralizedGaussianFit:
         assert "gaussian_fit_rejection_reason" not in result.diagnostics
         assert abs(result.diagnostics["gaussian_fit_params"]["center"] - 120.0) < 20.0
 
+    @staticmethod
+    def _record_filling_profiles(n_profiles=100):
+        """A centred Gaussian (peak 1, zero baseline) in a record of +/-2.5 SD,
+        N / (2 sigma) = 2.5, at nominal CNR 8: the reproduction in issue #41."""
+        N, sigma, nominal_cnr = 32, 6.4, 8.0
+        x = np.arange(N)
+        feature = np.exp(-0.5 * ((x - (N - 1) / 2) / sigma) ** 2)
+        noise = np.random.default_rng(2026).normal(0, 1 / nominal_cnr, (n_profiles, N))
+        return feature + noise
+
+    def test_feature_filling_record_keeps_its_sign(self):
+        """When the feature fills the record, the median-baseline start sits on
+        the feature and the farthest sample is an edge, and from there the fit
+        converged to a dip of the wrong sign (12 of these 100 profiles before
+        the peak-read start). No kept fit may have the wrong sign."""
+        results = [
+            fft_cnr(p, fit_model="generalized_gaussian")
+            for p in self._record_filling_profiles()
+        ]
+        kept = [
+            r for r in results
+            if r.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        ]
+        assert len(kept) >= 85
+        assert all(r.amplitude > 0 for r in kept)
+
+    def test_feature_filling_record_reads_its_peak(self):
+        """Profile 3 of the issue #41 reproduction read amplitude -0.63 (CNR 5.3,
+        centre 1.7 at the record edge) from the median-baseline start. The
+        peak-read start reaches the lower-residual fit of the right sign, centred
+        in the record."""
+        profile = self._record_filling_profiles()[3]
+        result = fft_cnr(profile, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        params = result.diagnostics["gaussian_fit_params"]
+        assert params["amplitude"] == pytest.approx(0.81906, rel=1e-4)
+        assert 14.0 < params["center"] < 17.0
+        assert result.cnr == pytest.approx(6.9333, rel=1e-4)
+
+    def test_dip_filling_record_mirrors_peak(self):
+        """The starts follow the signed excursion, so a dip is fitted as the
+        mirror image of the peak."""
+        profile = self._record_filling_profiles()[3]
+        peak = fft_cnr(profile, fit_model="generalized_gaussian")
+        dip = fft_cnr(-profile, fit_model="generalized_gaussian")
+        assert dip.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert dip.amplitude == pytest.approx(-peak.amplitude, rel=1e-9)
+        assert dip.cnr == pytest.approx(peak.cnr, rel=1e-9)
+
+    def test_repeated_calls_are_identical(self):
+        profile = self._record_filling_profiles()[3]
+        first = fft_cnr(profile, fit_model="generalized_gaussian")
+        second = fft_cnr(profile, fit_model="generalized_gaussian")
+        assert first.cnr == second.cnr
+        assert first.amplitude_se == second.amplitude_se
+        assert first.diagnostics["gaussian_fit_params"] == second.diagnostics["gaussian_fit_params"]
+
+    @pytest.mark.parametrize(
+        "first, second, expected_se",
+        [
+            # The first start reaches the minimum: the second does not replace it.
+            ("true", "dip", 0.1),
+            # The second start reaches the lower residual and replaces the first.
+            ("dip", "true", 0.2),
+            # Equal residuals: the first fit is kept.
+            ("true", "true", 0.1),
+        ],
+    )
+    def test_second_start_replaces_first_only_when_lower(self, first, second, expected_se):
+        """The fit with the lower sum of squared residuals is kept, and the first
+        start wins ties. The two mocked fits carry different covariances so the
+        reported standard error shows which fit was kept."""
+        N = 64
+        x = np.arange(N, dtype=float)
+        y = np.exp(-0.5 * ((x - 31.5) / 8.0) ** 2)
+        popts = {
+            "true": np.array([1.0, 31.5, 8.0, 0.0, 2.0]),
+            "dip": np.array([-0.5, 0.0, 3.0, 0.6, 2.0]),
+        }
+        side_effect = [
+            (popts[first], np.eye(5) * 0.1**2),
+            (popts[second], np.eye(5) * 0.2**2),
+        ]
+        with patch("fft_cnr.core.curve_fit", side_effect=side_effect):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.amplitude == pytest.approx(1.0)
+        assert result.amplitude_se == pytest.approx(expected_se)
+
 
 class TestPeakMethod:
     """Tests for the non-parametric peak amplitude estimation path."""
@@ -400,14 +488,15 @@ class TestEdgeCases:
     def test_generalized_gaussian_refuses_center_at_bound_real_profile(self):
         """A CNR-0.3 frame whose fit pins its center at the upper bound, half a
         profile outside the data, falls back to the peak read. Unrefused, the
-        fit reads a negative wing (amplitude about -9.7, fit CNR about 10)
-        under a positive peak. Its amplitude is about 1.6 times the data range
-        and its width about 49 samples, both clear of the other two rules, so
-        only the center rule catches it."""
+        fit reads a negative wing (amplitude about -10.4, fit CNR about 11)
+        under a positive peak. Its amplitude is about 1.65 times the data range
+        and its width about 64 samples, both clear of the other two rules, so
+        only the center rule catches it. Neither start finds a better fit
+        inside the data on this frame."""
         N = 241
         x = np.arange(N, dtype=float)
         clean = 0.3 * np.exp(-0.5 * ((x - (N - 1) / 2.0) / 20.0) ** 2)
-        y = clean + np.random.default_rng(2902).normal(0, 1, N)
+        y = clean + np.random.default_rng(4137).normal(0, 1, N)
         result = fft_cnr(y, fit_model="generalized_gaussian")
         peak = fft_cnr(y, fit_model="peak")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"

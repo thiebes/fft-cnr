@@ -594,17 +594,33 @@ def _estimate_noise_model(
     return model, {"var_signal_p": p_value}
 
 
-def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, dict]:
+def _fit_generalized_gaussian_amplitude(
+    x: np.ndarray, peak_start: tuple[float, int, float]
+) -> tuple[float, float, dict]:
     """Fit a generalized Gaussian peak + constant baseline to a 1-D profile.
 
     The model is ``A * exp(-0.5 * |z|^p) + baseline`` where ``z = (x - center) / sigma``.
     The shape parameter ``p`` controls kurtosis: p=2 is a standard Gaussian,
     p<2 produces heavy tails, and p>2 produces a flat top.
 
+    The fit runs from two starts and keeps the one with the lower sum of
+    squared residuals. The first puts the baseline at the median of the profile
+    and the peak at the sample farthest from it. When a feature fills the
+    record, the median lies on the feature and the farthest sample is an edge,
+    so from this start the fit can converge to a dip of the wrong sign at that
+    edge, a local minimum. The second start is the peak read: the largest
+    excursion of the low-pass reconstruction from the edge baseline, at its
+    location, with the baseline at the edge level. The second fit replaces the
+    first only when its sum of squared residuals is lower by more than
+    ``_GG_SECOND_START_RTOL``, so where both starts reach the same minimum the
+    first fit is kept unchanged.
+
     Parameters
     ----------
     x : np.ndarray
         Input 1-D profile (original, not demeaned).
+    peak_start : tuple of (float, int, float)
+        Amplitude, index, and baseline of the peak read (``_peak_read``).
 
     Returns
     -------
@@ -628,27 +644,38 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
     amplitude_init = float(residual[peak_idx])
     center_init = float(peak_idx)
     sigma_init = float(N) / 10.0
+    read_amplitude, read_idx, read_baseline = peak_start
 
-    p0 = [amplitude_init, center_init, sigma_init, baseline_init, 2.0]
+    starts = (
+        [amplitude_init, center_init, sigma_init, baseline_init, 2.0],
+        [float(read_amplitude), float(read_idx), sigma_init, float(read_baseline), 2.0],
+    )
     bounds = (
         [-np.inf, _GG_CENTER_MIN_TO_LENGTH * N, 0.5, -np.inf, 0.5],
         [np.inf, _GG_CENTER_MAX_TO_LENGTH * N, _GG_SIGMA_MAX_TO_LENGTH * N, np.inf, 10.0],
     )
 
-    try:
-        popt, pcov = curve_fit(_gen_gaussian, x_grid, x, p0=p0, bounds=bounds)
-        amplitude = float(popt[0])
-        amplitude_se = float(np.sqrt(pcov[0, 0]))
-        fit_params = {
-            "amplitude": float(popt[0]),
-            "center": float(popt[1]),
-            "sigma": float(popt[2]),
-            "baseline": float(popt[3]),
-            "shape": float(popt[4]),
-        }
-        return amplitude, amplitude_se, fit_params
-    except (RuntimeError, ValueError):
+    best_ssr = np.inf
+    best = None
+    for p0 in starts:
+        try:
+            popt, pcov = curve_fit(_gen_gaussian, x_grid, x, p0=p0, bounds=bounds)
+        except (RuntimeError, ValueError):
+            continue
+        ssr = float(np.sum((x - _gen_gaussian(x_grid, *popt)) ** 2))
+        if ssr < best_ssr * (1.0 - _GG_SECOND_START_RTOL):
+            best_ssr, best = ssr, (popt, pcov)
+    if best is None:
         return np.nan, np.nan, {}
+    popt, pcov = best
+    fit_params = {
+        "amplitude": float(popt[0]),
+        "center": float(popt[1]),
+        "sigma": float(popt[2]),
+        "baseline": float(popt[3]),
+        "shape": float(popt[4]),
+    }
+    return fit_params["amplitude"], float(np.sqrt(pcov[0, 0])), fit_params
 
 
 # Degenerate generalized-Gaussian fits on noise-dominated profiles. A fitted
@@ -675,6 +702,11 @@ _GG_CENTER_MAX_TO_LENGTH = 1.5
 # often of the wrong sign; on a feature at the profile edge it is usually a
 # fit of the correct sign whose peak lies beyond the edge.
 _GG_CENTER_BOUND_TOL_TO_LENGTH = 1e-3
+# Relative margin by which the second generalized-Gaussian start (the peak
+# read) must lower the sum of squared residuals to replace the first fit. Two
+# starts that converge to the same minimum differ only at the optimizer's
+# tolerance, and the first fit is then kept unchanged.
+_GG_SECOND_START_RTOL = 1e-9
 
 
 def _degenerate_gaussian_fit_reason(fit_params: dict, x: np.ndarray) -> str | None:
@@ -732,6 +764,21 @@ _MIN_ROI_SPAN = 16
 _NOISE_MODEL_NULL_DRAWS = 199
 _NOISE_MODEL_TEST_LEVEL = 0.05
 _NOISE_MODEL_MIN_RANGE_SIGMAS = 3.0
+
+
+def _peak_read(x_raw: np.ndarray, x_lp_raw: np.ndarray) -> tuple[float, np.ndarray, int]:
+    """Edge baseline, low-pass excursion from it, and the read location.
+
+    The baseline is the mean of the outer ``N // 4`` samples at each end of the
+    raw profile. The read location is the largest-magnitude excursion of the
+    low-pass reconstruction from that baseline, so a negative (absorption /
+    dark-contrast) feature is read with its sign. Shared by the peak path and
+    the second start of the generalized-Gaussian fit.
+    """
+    margin = max(1, x_raw.size // 4)
+    baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
+    excursion = x_lp_raw - baseline
+    return baseline, excursion, int(np.argmax(np.abs(excursion)))
 
 
 def _peak_read_weights(N: int, peak_idx: int, kc_full: int, margin: int) -> np.ndarray:
@@ -932,7 +979,11 @@ def fft_cnr(
         arbitrary profile shapes. ``"generalized_gaussian"`` fits a
         5-parameter generalized Gaussian with a shape exponent that
         accommodates non-zero excess kurtosis, providing fitted
-        parameters (center, width, shape) in diagnostics. A fit that fails,
+        parameters (center, width, shape) in diagnostics. The fit starts
+        from the sample farthest from the profile's median and from the
+        peak read, and keeps the fit with the lower sum of squared
+        residuals; the second start keeps a feature that fills most of the
+        record from being fitted as a dip of the wrong sign. A fit that fails,
         or that is degenerate (fitted amplitude more than twice the data's
         peak-to-peak range, width pinned at the profile length, or center
         pinned at its bound, half a profile length outside the data), falls
@@ -1154,7 +1205,10 @@ def fft_cnr(
         amp_method = "matched_filter"
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
-        Amp, Amp_se, gfit_params = _fit_generalized_gaussian_amplitude(x_raw)
+        read_baseline, read_excursion, read_idx = _peak_read(x_raw, x_lp + x_mean)
+        Amp, Amp_se, gfit_params = _fit_generalized_gaussian_amplitude(
+            x_raw, (float(read_excursion[read_idx]), read_idx, read_baseline)
+        )
         gfit_rejection_reason = _degenerate_gaussian_fit_reason(gfit_params, x_raw)
         if gfit_rejection_reason is not None:
             gfit_params = {}
@@ -1169,13 +1223,7 @@ def fft_cnr(
     amplitude_sign_ambiguous = False
     if amp_method in ("peak", "generalized_gaussian_fit_fallback"):
         margin = max(1, N // 4)
-        x_raw = x + x_mean
-        baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
-        # Read the largest-magnitude excursion from the baseline so a negative
-        # (absorption / dark-contrast) feature is measured with the right sign;
-        # for a positive peak this is the peak height, unchanged.
-        dev = (x_lp + x_mean) - baseline
-        peak_idx = int(np.argmax(np.abs(dev)))
+        _, dev, peak_idx = _peak_read(x + x_mean, x_lp + x_mean)
         Amp = float(dev[peak_idx])
         weights = _peak_read_weights(N, peak_idx, kc_full, margin)
         if variance is None:
