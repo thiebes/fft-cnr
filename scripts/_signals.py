@@ -2,8 +2,9 @@
 
 Each generator returns ``(noisy, clean)`` for a given length, amplitude, width,
 noise level, and seed, so the scripts draw identical profiles from one source
-rather than carrying their own copies. ``SHAPES`` and ``METHODS`` are the common
-sweep axes used by more than one script.
+rather than carrying their own copies. Most draw one profile per seed;
+``_gaussian_batch`` draws a whole batch from one seed. ``SHAPES`` and ``METHODS``
+are the common sweep axes used by more than one script.
 """
 
 import numpy as np
@@ -47,6 +48,21 @@ def _lorentzian(N, amplitude, sigma, noise_std, seed):
     center = (N - 1) / 2.0
     clean = amplitude / (1.0 + ((x - center) / sigma) ** 2)
     return clean + rng.normal(0, noise_std, N), clean
+
+
+def _gaussian_batch(N, amplitude, sigma, noise_std, seed, n_profiles):
+    """Centered Gaussians with the noise of all ``n_profiles`` drawn as one array.
+
+    Returns ``(noisy, clean)`` with ``noisy`` of shape ``(n_profiles, N)``. All
+    rows come from one random stream seeded by ``seed`` (an int or a seed list),
+    unlike the one-seed-per-profile generators above. So one row cannot be
+    redrawn on its own with ``_gaussian``, and the first rows are the same for
+    any ``n_profiles``.
+    """
+    x = np.arange(N, dtype=float)
+    clean = amplitude * np.exp(-0.5 * ((x - (N - 1) / 2.0) / sigma) ** 2)
+    noise = np.random.default_rng(seed).normal(0, noise_std, (n_profiles, N))
+    return clean + noise, clean
 
 
 SHAPES = {

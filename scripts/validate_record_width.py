@@ -1,21 +1,33 @@
 """Record width needed by the generalized-Gaussian and peak paths.
 
-A centred Gaussian (peak 1, zero baseline) sits in a record of half-width
+A centered Gaussian (peak 1, zero baseline) sits in a record of half-width
 k = N / (2 sigma) feature standard deviations, in white Gaussian noise of
 standard deviation 1 / CNR, where CNR is the nominal CNR (the simulation input).
 Each k uses three record designs: N = 32 and N = 52 with sigma = N / (2k), and
-sigma = 5 samples with N = 2 round(5k). Each (k, design, CNR) cell draws its
-profiles as one array from ``np.random.default_rng([35400, ki, ri, ci])``.
+sigma = 5 samples with N = 2 round(5k), which gives N = 16, 20, 24, 30, 36, and
+40. At k = 1.5 and 3.5, 5k is not a whole number, and at k = 2.5 Python rounds
+12.5 to 12, so that design runs at a half width of 1.6, 3.6, and 2.4 SD there;
+the by-design table prints each design's actual half width. Each (k, design,
+CNR) cell draws its profiles as one array from
+``np.random.default_rng([35400, ki, ri, ci])`` (indices of k, design, and CNR),
+the seeds of the tables in issue #41.
 
 For each k and CNR, pooled over the designs, the script reports:
 
 - the share of profiles whose generalized-Gaussian fit is kept with a negative
   amplitude (the wrong sign under this positive feature);
 - the median CNR / nominal on the generalized-Gaussian path, fallbacks included;
-- the share of fallbacks to the peak read, with the most common refusal reason;
-- the median CNR / nominal on the peak path, and its noiseless prediction
-  ``1 - sqrt(2 pi) [Phi(k) - Phi(k/2)] / (k/2)``: the edge baseline (the mean of
-  the outer N // 4 samples) averages the feature over k/2 to k SD.
+- the share of fallbacks to the peak read, with the most common reason (a
+  refusal named in ``gaussian_fit_rejection_reason``, or a fit that failed);
+- the median CNR / nominal on the peak path, beside the continuum approximation
+  of its noiseless read, ``1 - sqrt(2 pi) [Phi(k) - Phi(k/2)] / (k/2)``: the edge
+  baseline (the mean of the outer N // 4 samples) averages the feature over k/2
+  to k SD. The package's own noiseless read is a little lower on a short
+  record of even length: the middle samples sit half a sample from the
+  feature's center, and the low-pass smooths the peak. At k = 4 it is 0.960,
+  0.969, and 0.967 on the three designs, against 0.972.
+
+A second table gives the wrong-sign share for each design separately.
 
 Usage:
     uv run python scripts/validate_record_width.py
@@ -31,6 +43,7 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 from scipy.stats import norm
 
+from _signals import _gaussian_batch
 from fft_cnr import fft_cnr
 
 HALF_WIDTHS = (1.5, 2.0, 2.5, 3.0, 3.5, 4.0)
@@ -38,23 +51,20 @@ DESIGNS = ("N = 32", "N = 52", "sigma = 5")
 CNR_VALUES = (5, 8, 13, 21, 34)
 
 
-def _record(ki, ri):
-    """Record length and feature standard deviation of one design."""
-    k = HALF_WIDTHS[ki]
-    if ri == 2:
+def _record(k, design):
+    """Record length and feature standard deviation of one design at half width k."""
+    if design == "sigma = 5":
         return 2 * round(5 * k), 5.0
-    N = (32, 52)[ri]
+    N = {"N = 32": 32, "N = 52": 52}[design]
     return N, N / (2 * k)
 
 
 def _run_cell(cell, trials):
     """Per-profile outcomes of one (k, design, CNR) cell."""
     ki, ri, ci = cell
-    N, sigma = _record(ki, ri)
+    N, sigma = _record(HALF_WIDTHS[ki], DESIGNS[ri])
     cnr = CNR_VALUES[ci]
-    grid = np.arange(N, dtype=float)
-    feature = np.exp(-0.5 * ((grid - (N - 1) / 2) / sigma) ** 2)
-    profiles = feature + np.random.default_rng([35400, ki, ri, ci]).normal(0, 1 / cnr, (trials, N))
+    profiles, _ = _gaussian_batch(N, 1.0, sigma, 1 / cnr, [35400, ki, ri, ci], trials)
     outcomes = []
     for profile in profiles:
         fit = fft_cnr(profile, fit_model="generalized_gaussian")
@@ -74,6 +84,13 @@ def _predicted_peak_read(k):
     return 1.0 - np.sqrt(2 * np.pi) * (norm.cdf(k) - norm.cdf(k / 2)) / (k / 2)
 
 
+def _progress(done, total):
+    sys.stderr.write(f"\r  {done}/{total} cells")
+    sys.stderr.flush()
+    if done == total:
+        sys.stderr.write("\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -85,22 +102,24 @@ def main():
     cells = [(ki, ri, ci) for ki in range(len(HALF_WIDTHS)) for ri in range(len(DESIGNS))
              for ci in range(len(CNR_VALUES))]
     trials = [args.trials] * len(cells)
-    if args.workers > 1:
-        with ProcessPoolExecutor(max_workers=args.workers) as pool:
-            results = dict(pool.map(_run_cell, cells, trials))
-    else:
-        results = {}
-        for done, (cell, outcomes) in enumerate(map(_run_cell, cells, trials), 1):
+    results = {}
+    pool = ProcessPoolExecutor(max_workers=args.workers) if args.workers > 1 else None
+    try:
+        outcomes_iter = pool.map(_run_cell, cells, trials) if pool else map(_run_cell, cells, trials)
+        for done, (cell, outcomes) in enumerate(outcomes_iter, 1):
             results[cell] = outcomes
-            sys.stderr.write(f"\r  {done}/{len(cells)} cells")
-        sys.stderr.write("\n")
+            _progress(done, len(cells))
+    finally:
+        if pool:
+            pool.shutdown()
 
-    print(f"Centred Gaussian in a record of +/-k SD, {args.trials} profiles per (k, design, CNR) "
+    print(f"Centered Gaussian in a record of +/-k SD, {args.trials} profiles per (k, design, CNR) "
           f"cell, designs {', '.join(DESIGNS)} pooled.")
-    print("Columns per CNR: wrong-sign share / fit-path median / fallback share / "
-          "peak-path median (CNR / nominal).")
+    print("Columns: wrong-sign share, fit-path median, fallback share, peak-path median "
+          "(medians are CNR / nominal), and the continuum approximation of the noiseless "
+          "peak read.")
     print(f"{'record':<10} {'CNR':>4} {'wrong sign':>11} {'fit median':>11} {'fallback':>9} "
-          f"{'peak median':>12} {'predicted':>10}  most common refusal")
+          f"{'peak median':>12} {'predicted':>10}  most common fallback reason")
     for ki, k in enumerate(HALF_WIDTHS):
         for ci, cnr in enumerate(CNR_VALUES):
             pooled = [o for ri in range(len(DESIGNS)) for o in results[(ki, ri, ci)]]
@@ -112,14 +131,16 @@ def main():
                   f"{np.median([o['peak_ratio'] for o in pooled]):>12.2f} "
                   f"{_predicted_peak_read(k):>10.3f}  {common}")
     print()
-    print("Wrong-sign share by design, CNR " + ", ".join(map(str, CNR_VALUES)) + ":")
+    print("Wrong-sign share by design (record length and actual half width), CNR "
+          + ", ".join(map(str, CNR_VALUES)) + ":")
     for ki, k in enumerate(HALF_WIDTHS):
         parts = []
         for ri, design in enumerate(DESIGNS):
-            N, _ = _record(ki, ri)
+            N, sigma = _record(k, design)
             shares = [np.mean([o["wrong_sign"] for o in results[(ki, ri, ci)]])
                       for ci in range(len(CNR_VALUES))]
-            parts.append(f"{design} (N {N}): " + " ".join(f"{s:.3f}" for s in shares))
+            parts.append(f"{design} (N {N}, +/-{N / (2 * sigma):g} SD): "
+                         + " ".join(f"{s:.3f}" for s in shares))
         print(f"+/-{k:g} SD  " + "; ".join(parts))
 
 
