@@ -17,10 +17,15 @@ the outputs that follow the fit: ``cnr``, ``cnr_ci95``, ``amplitude``,
 ``amplitude_se``, ``amplitude_snr``, and the diagnostics
 ``gaussian_fit_params``, ``gaussian_fit_rejection_reason``,
 ``amplitude_method``, and ``amplitude_sign_ambiguous``. Every other difference
-still fails. An accepted change is counted by its relative residual gain:
-below ``_SAME_MINIMUM_RTOL`` the two fits are the same minimum reached from two
-starts, above it the working tree's fit is a lower minimum, and a reference fit
-that failed to converge is counted on its own.
+still fails. Each release's fit is replayed outside fft_cnr, and a replay must
+reproduce the fit parameters its result reports. The working tree's fit must
+lower the reference fit's residual by more than the working tree's own margin
+(``_GG_SECOND_START_RTOL``). An accepted change is counted by that relative
+gain: below ``SAME_MINIMUM_RTOL`` the two fits are the same minimum reached
+from two starts, above it the working tree's fit is a lower minimum, and a
+reference fit that failed to converge is counted on its own. The summary prints
+the gains of each outcome, the amplitude change of the same-minimum runs, and
+how the changed runs move between a kept fit and the fallback.
 
 Both versions run in one interpreter, so they share numpy and scipy and only
 the package code differs.
@@ -54,10 +59,11 @@ FIT_FIELDS = {"cnr", "cnr_ci95", "amplitude", "amplitude_se", "amplitude_snr", "
 FIT_DIAGNOSTICS = {"gaussian_fit_params", "gaussian_fit_rejection_reason",
                    "amplitude_method", "amplitude_sign_ambiguous"}
 # Relative residual gain below which an accepted change is the same minimum
-# reached from two starts. curve_fit stops at a relative tolerance of 1e-8, and
-# in the 0.4.2 batch every gain lies below 1e-8 or above 1e-6.
-_SAME_MINIMUM_RTOL = 1e-6
-OUTCOMES = ("identical", "same minimum", "lower minimum", "reference fit failed", "fail")
+# reached from two starts; curve_fit stops at a relative tolerance of 1e-8.
+SAME_MINIMUM_RTOL = 1e-6
+ACCEPTED_CHANGES = ("same minimum", "lower minimum", "reference fit failed")
+OUTCOMES = ("identical", *ACCEPTED_CHANGES, "fail")
+TRANSITIONS = ("kept to kept", "fallback to kept", "kept to fallback", "fallback to fallback")
 
 
 def _load_reference_core(ref):
@@ -201,14 +207,14 @@ def _added_noise_model_fields(reference_core):
     ]
 
 
-def _fit_ssr(core_module, profile):
-    """Sum of squared residuals of a release's generalized-Gaussian fit to the
-    profile, as its fft_cnr fits it with default options (inf if the fit fails).
+def _fit_params(core_module, profile):
+    """The profile as a release's fft_cnr fits it, and that release's
+    generalized-Gaussian fit parameters with default options (empty if the fit
+    fails).
 
     The decomposition options are read from that release's fft_cnr signature.
     Releases up to 0.4.1 fit the profile alone; from 0.4.2 the fit also takes
-    the peak read. The model is written out because the fit's model function is
-    local to it."""
+    the peak read."""
     defaults = inspect.signature(core_module.fft_cnr).parameters
     options = ("window", "tukey_alpha", "welch_nperseg", "welch_noverlap",
                "cutoff_guard", "fallback_cut_frac")
@@ -222,6 +228,12 @@ def _fit_ssr(core_module, profile):
         _, _, params = fit(x_raw, (float(excursion[idx]), idx, baseline))
     else:
         _, _, params = fit(x_raw)
+    return x_raw, params
+
+
+def _params_ssr(x_raw, params):
+    """Sum of squared residuals of fit parameters (inf for a failed fit). The
+    model is written out because the fit's model function is local to it."""
     if not params:
         return np.inf
     grid = np.arange(x_raw.size, dtype=float)
@@ -244,17 +256,30 @@ def _differs_only_in_fit_outputs(reference, result, differing):
     )
 
 
-def _classify_fit_change(reference_core, profile):
-    """The accepted-change outcome for a differing generalized-Gaussian run, or
-    'fail' when the working tree's fit does not have a lower residual."""
-    reference_ssr = _fit_ssr(reference_core, profile)
-    candidate_ssr = _fit_ssr(candidate, profile)
-    if not candidate_ssr < reference_ssr:
-        return "fail"
+def _replay_matches(result, params):
+    """A kept fit's reported parameters must equal the replayed fit's."""
+    reported = result.diagnostics.get("gaussian_fit_params")
+    return reported is None or _bits_equal(reported, params)
+
+
+def _classify_fit_change(reference_core, profile, reference, result):
+    """The outcome of a differing generalized-Gaussian run, and for a lower or
+    same minimum its relative residual gain and amplitude change."""
+    reference_x, reference_params = _fit_params(reference_core, profile)
+    candidate_x, candidate_params = _fit_params(candidate, profile)
+    if not (_replay_matches(reference, reference_params)
+            and _replay_matches(result, candidate_params)):
+        return "fail", {}
+    reference_ssr = _params_ssr(reference_x, reference_params)
+    candidate_ssr = _params_ssr(candidate_x, candidate_params)
     if np.isinf(reference_ssr):
-        return "reference fit failed"
+        return ("reference fit failed" if np.isfinite(candidate_ssr) else "fail"), {}
     gain = (reference_ssr - candidate_ssr) / reference_ssr
-    return "same minimum" if gain < _SAME_MINIMUM_RTOL else "lower minimum"
+    if not gain > getattr(candidate, "_GG_SECOND_START_RTOL", 0.0):
+        return "fail", {}
+    amplitude_change = abs(candidate_params["amplitude"] / reference_params["amplitude"] - 1)
+    outcome = "same minimum" if gain < SAME_MINIMUM_RTOL else "lower minimum"
+    return outcome, {"gain": gain, "amplitude_change": amplitude_change}
 
 
 def _peak_snr(result):
@@ -274,19 +299,57 @@ def _path_name(kwargs):
 
 
 def _compare_run(reference_core, profile, kwargs, reference, result, allow_fit_changes):
-    """One of OUTCOMES, and the names of the differing outputs."""
+    """One of OUTCOMES, the names of the differing outputs, and the details of
+    an accepted change."""
     differing = _differing_attributes(reference, result)
     if not differing:
-        return "identical", differing
+        return "identical", differing, {}
     fit_run = kwargs == {"fit_model": "generalized_gaussian"}
     if allow_fit_changes and fit_run and _differs_only_in_fit_outputs(reference, result, differing):
-        return _classify_fit_change(reference_core, profile), differing
-    return "fail", differing
+        outcome, details = _classify_fit_change(reference_core, profile, reference, result)
+        return outcome, differing, details
+    return "fail", differing, {}
 
 
 def _record_outcome(path_to_counts, kwargs, outcome):
     counts = path_to_counts.setdefault(_path_name(kwargs), dict.fromkeys(OUTCOMES, 0))
     counts[outcome] += 1
+
+
+def _record_change(change_log, outcome, details, reference, result):
+    """Add an accepted change's gain, amplitude change, and kept-or-fallback
+    transition to the log. A kept-to-fallback run counts as a wrong sign when
+    the reference's kept fit has the opposite sign to the peak read."""
+    entry = change_log.setdefault(outcome, {"gain": [], "amplitude_change": [],
+                                            **dict.fromkeys(TRANSITIONS, 0), "wrong sign": 0})
+    for key, value in details.items():
+        entry[key].append(value)
+    kept = [run.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+            for run in (reference, result)]
+    transition = f"{'kept' if kept[0] else 'fallback'} to {'kept' if kept[1] else 'fallback'}"
+    entry[transition] += 1
+    if transition == "kept to fallback" and np.sign(reference.amplitude) != np.sign(result.amplitude):
+        entry["wrong sign"] += 1
+
+
+def _print_changes(change_log):
+    for outcome in ACCEPTED_CHANGES:
+        entry = change_log.get(outcome)
+        if not entry:
+            continue
+        n = sum(entry[t] for t in TRANSITIONS)
+        line = f"{outcome}: {n} runs"
+        if entry["gain"]:
+            gains = np.array(entry["gain"])
+            line += (f"; relative residual gain {gains.min():.2e} to {gains.max():.2e} "
+                     f"(median {np.median(gains):.2e})")
+        if outcome == "same minimum" and entry["amplitude_change"]:
+            changes = np.array(entry["amplitude_change"])
+            line += (f"; relative amplitude change median {np.median(changes):.1e}, "
+                     f"max {changes.max():.1e}")
+        print(line)
+        print("    " + ", ".join(f"{t} {entry[t]}" for t in TRANSITIONS)
+              + f" (wrong sign in the reference: {entry['wrong sign']})")
 
 
 def main():
@@ -309,6 +372,7 @@ def main():
 
     failures = 0
     path_to_counts = {}
+    change_log = {}
     for label, profile, kwargs in cases:
         for estimate_noise_model in (False, True):
             reference = reference_core.fft_cnr(
@@ -317,10 +381,12 @@ def main():
             result = candidate.fft_cnr(
                 profile, estimate_noise_model=estimate_noise_model, **kwargs
             )
-            outcome, differing = _compare_run(reference_core, profile, kwargs, reference,
-                                              result, args.allow_fit_changes)
+            outcome, differing, details = _compare_run(reference_core, profile, kwargs,
+                                                       reference, result, args.allow_fit_changes)
             failures += outcome == "fail"
             _record_outcome(path_to_counts, kwargs, outcome)
+            if outcome in ACCEPTED_CHANGES:
+                _record_change(change_log, outcome, details, reference, result)
             status = {"identical": "identical", "fail": "DIFFER: " + ", ".join(differing)}.get(
                 outcome, f"changed: {outcome}")
             snr_columns = (
@@ -334,9 +400,11 @@ def main():
     for label, profile, kwargs in _batch_cases(args.batch) if args.batch else ():
         reference = reference_core.fft_cnr(profile, **kwargs)
         result = candidate.fft_cnr(profile, **kwargs)
-        outcome, differing = _compare_run(reference_core, profile, kwargs, reference, result,
-                                          args.allow_fit_changes)
+        outcome, differing, details = _compare_run(reference_core, profile, kwargs, reference,
+                                                   result, args.allow_fit_changes)
         _record_outcome(path_to_counts, kwargs, outcome)
+        if outcome in ACCEPTED_CHANGES:
+            _record_change(change_log, outcome, details, reference, result)
         if outcome == "fail":
             batch_failures.append(f"{label} ({_path_name(kwargs)}): {', '.join(differing)}")
     failures += len(batch_failures)
@@ -348,10 +416,13 @@ def main():
     for path, counts in path_to_counts.items():
         print(f"{path:<24}" + "".join(f" {counts[outcome]:>21}" for outcome in OUTCOMES))
     print()
+    if change_log:
+        _print_changes(change_log)
+        print()
     if failures:
         print(f"{failures} run(s) differ from {args.ref}.")
         sys.exit(1)
-    changed = sum(counts[o] for counts in path_to_counts.values() for o in OUTCOMES[1:4])
+    changed = sum(counts[o] for counts in path_to_counts.values() for o in ACCEPTED_CHANGES)
     if changed:
         print(f"All runs bit-identical to {args.ref} apart from the added fields, peak_snr, "
               f"and {changed} generalized-Gaussian runs whose fit has a lower residual and "

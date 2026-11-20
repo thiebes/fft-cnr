@@ -13,7 +13,9 @@ from fft_cnr.core import (
     _GG_CENTER_MAX_TO_LENGTH,
     _GG_CENTER_MIN_TO_LENGTH,
     _GG_SIGMA_MAX_TO_LENGTH,
+    _degenerate_gaussian_fit_reason,
     _noise_band_dof,
+    _peak_read,
 )
 
 
@@ -243,9 +245,9 @@ class TestGeneralizedGaussianFit:
     def test_feature_filling_record_keeps_its_sign(self):
         """When the feature fills the record, the median-baseline start sits on
         the feature and the farthest sample is an edge. From that start alone,
-        12 of these 100 profiles converge to a dip of the wrong sign. No kept fit
-        may have the wrong sign. The floor on kept fits (91 today) keeps the
-        test from passing by refusing fits instead of fitting them correctly."""
+        12 of these 100 profiles keep a fit of the wrong sign. No kept fit may
+        have the wrong sign. The floor of 85 kept fits keeps the test from
+        passing by refusing fits instead of fitting them correctly."""
         results = [
             fft_cnr(p, fit_model="generalized_gaussian")
             for p in self._record_filling_profiles()
@@ -283,22 +285,27 @@ class TestGeneralizedGaussianFit:
 
     def test_starts_at_median_extreme_then_peak_read(self):
         """The first start is the sample farthest from the profile's median, with
-        the baseline at the median. The second is the peak read: the signed
-        amplitude the peak path reports, at a location inside the record, with
-        the baseline at the mean of the outer N // 4 samples. Both use width N/10,
-        shape 2, and the same bounds."""
+        the baseline at the median. The second is the peak read (``_peak_read``):
+        the signed excursion of the low-pass reconstruction from the edge level,
+        at its location, with the baseline at that edge level (the mean of the
+        outer N // 4 samples). Both use width N/10, shape 2, and the same bounds."""
         profile = self._record_filling_profiles()[3]
         N = profile.size
-        calls = []
+        fits, reads = [], []
 
-        def record(*args, **kwargs):
-            calls.append(kwargs)
+        def record_fit(*args, **kwargs):
+            fits.append(kwargs)
             return curve_fit(*args, **kwargs)
 
-        with patch("fft_cnr.core.curve_fit", side_effect=record):
+        def record_read(*args):
+            reads.append(_peak_read(*args))
+            return reads[-1]
+
+        with patch("fft_cnr.core.curve_fit", side_effect=record_fit), \
+                patch("fft_cnr.core._peak_read", side_effect=record_read):
             fft_cnr(profile, fit_model="generalized_gaussian")
-        assert len(calls) == 2
-        first, second = (np.asarray(call["p0"]) for call in calls)
+        assert len(fits) == 2 and len(reads) == 1
+        first, second = (np.asarray(call["p0"]) for call in fits)
 
         median = np.median(profile)
         k = int(np.argmax(np.abs(profile - median)))
@@ -306,26 +313,34 @@ class TestGeneralizedGaussianFit:
         assert first[0] == pytest.approx(profile[k] - median, rel=1e-12)
         assert first[3] == pytest.approx(median, rel=1e-12)
 
+        read_baseline, read_excursion, read_idx = reads[0]
+        assert second[1] == read_idx
+        assert second[0] == read_excursion[read_idx] == fft_cnr(profile).amplitude
+        assert second[3] == read_baseline
         margin = N // 4
         edge_level = np.mean(np.concatenate([profile[:margin], profile[-margin:]]))
-        assert second[0] == fft_cnr(profile).amplitude
-        assert second[1] == round(second[1]) and 0 <= second[1] < N
-        assert second[3] == pytest.approx(edge_level, rel=1e-12)
+        assert read_baseline == pytest.approx(edge_level, rel=1e-12)
 
         for p0 in (first, second):
             assert p0[2] == N / 10.0
             assert p0[4] == 2.0
-        for bound_first, bound_second in zip(calls[0]["bounds"], calls[1]["bounds"]):
+        for bound_first, bound_second in zip(fits[0]["bounds"], fits[1]["bounds"]):
             np.testing.assert_array_equal(bound_first, bound_second)
 
     @staticmethod
-    def _two_fit_side_effect(first_popt, second_popt):
+    def _gen_gaussian(x, popt):
+        """The fitted model ``A * exp(-0.5 * |(x - c) / s|**p) + b`` at ``popt``."""
+        amplitude, center, sigma, baseline, shape = popt
+        return amplitude * np.exp(-0.5 * np.abs((x - center) / sigma) ** shape) + baseline
+
+    @staticmethod
+    def _two_fit_side_effect(first, second):
         """Mocked curve_fit results whose covariances differ (SE 0.1 and 0.2), so
-        the reported standard error shows which fit was kept. A popt of None
-        makes that call raise, as a fit that does not converge."""
+        the reported standard error shows which fit was kept. An exception in
+        place of a popt makes that call raise it, as a fit that fails."""
         side_effect = []
-        for popt, se in ((first_popt, 0.1), (second_popt, 0.2)):
-            side_effect.append(RuntimeError("no convergence") if popt is None
+        for popt, se in ((first, 0.1), (second, 0.2)):
+            side_effect.append(popt if isinstance(popt, Exception)
                                else (popt, np.eye(5) * se**2))
         return side_effect
 
@@ -338,23 +353,24 @@ class TestGeneralizedGaussianFit:
             ("dip", "true", 0.2),
             # An exact tie: the first fit is kept.
             ("true", "true", 0.1),
-            # A failed fit loses to any fit that converges.
-            (None, "true", 0.2),
-            ("true", None, 0.1),
+            # A fit that fails loses to any fit that converges.
+            ("runtime error", "true", 0.2),
+            ("true", "value error", 0.1),
         ],
     )
     def test_second_start_replaces_first_only_when_lower(self, first, second, expected_se):
         """The fit with the lower sum of squared residuals is kept, the first
-        start wins an exact tie, and a fit that fails to converge loses to one
-        that converges."""
+        start wins an exact tie, and a fit that fails (RuntimeError or
+        ValueError from curve_fit) loses to one that converges."""
         N = 64
         x = np.arange(N, dtype=float)
-        y = np.exp(-0.5 * ((x - 31.5) / 8.0) ** 2)
         popts = {
             "true": np.array([1.0, 31.5, 8.0, 0.0, 2.0]),
             "dip": np.array([-0.5, 0.0, 3.0, 0.6, 2.0]),
-            None: None,
+            "runtime error": RuntimeError("no convergence"),
+            "value error": ValueError("infeasible start"),
         }
+        y = self._gen_gaussian(x, popts["true"])
         side_effect = self._two_fit_side_effect(popts[first], popts[second])
         with patch("fft_cnr.core.curve_fit", side_effect=side_effect):
             result = fft_cnr(y, fit_model="generalized_gaussian")
@@ -362,32 +378,37 @@ class TestGeneralizedGaussianFit:
         assert result.amplitude == pytest.approx(1.0)
         assert result.amplitude_se == pytest.approx(expected_se)
 
+    @pytest.mark.parametrize("scale", [1e-3, 1e3])
     @pytest.mark.parametrize(
         "relative_gain, expected_se",
         [
-            # Below the 1e-9 margin: the same minimum, so the first fit is kept.
+            # Gain below the 1e-9 margin: the first fit is kept.
             (1e-11, 0.1),
-            # Above it: a lower minimum, so the second fit replaces the first.
+            # Gain above the margin: the second fit replaces the first.
             (1e-7, 0.2),
         ],
     )
-    def test_second_start_margin(self, relative_gain, expected_se):
+    def test_second_start_margin(self, scale, relative_gain, expected_se):
         """The second fit replaces the first only when its sum of squared
         residuals is lower by more than a relative 1e-9 (_GG_SECOND_START_RTOL).
-        The two mocked fits differ only in baseline, shifted by the amount that
-        lowers the residual by ``relative_gain``. The offsets bracket the margin
-        by a factor of 100 on each side, so the test fails if the margin moves
-        outside roughly 1e-11 to 1e-7."""
+        The two mocked fits differ only in baseline, shifted by the small amount
+        that lowers the residual by ``relative_gain``. The gains bracket the
+        margin by a factor of 100 on each side, so the test fails if the margin
+        moves outside roughly 1e-11 to 1e-7. The profile is scaled by 1e-3 and
+        1e3 so that an absolute margin of 1e-9 fails one of the two scales."""
         N = 64
         x = np.arange(N, dtype=float)
-        y = np.exp(-0.5 * ((x - 31.5) / 8.0) ** 2)
-        y = y + np.random.default_rng(0).normal(0, 0.05, N)
-        first_popt = np.array([1.0, 31.5, 8.0, 0.05, 2.0])
-        residual = y - (first_popt[0] * np.exp(-0.5 * ((x - 31.5) / 8.0) ** 2) + first_popt[3])
+        first_popt = np.array([scale, 31.5, 8.0, 0.05 * scale, 2.0])
+        y = self._gen_gaussian(x, first_popt - np.array([0.0, 0.0, 0.0, 0.05 * scale, 0.0]))
+        y = y + np.random.default_rng(0).normal(0, 0.05 * scale, N)
+        residual = y - self._gen_gaussian(x, first_popt)
         total, ssr = np.sum(residual), np.sum(residual**2)
-        # sum((r - e)**2) = ssr - 2 e total + N e**2; solve for the smaller root.
-        shift = (total - np.sqrt(total**2 - N * relative_gain * ssr)) / N
+        # sum((r - e)**2) = ssr - 2 e total + N e**2. The root of smaller magnitude,
+        # in a form that keeps its precision when relative_gain is tiny.
+        shift = relative_gain * ssr / (total + np.sign(total) * np.sqrt(total**2 - N * relative_gain * ssr))
         second_popt = first_popt + np.array([0.0, 0.0, 0.0, shift, 0.0])
+        achieved = 1.0 - np.sum((y - self._gen_gaussian(x, second_popt)) ** 2) / ssr
+        assert achieved == pytest.approx(relative_gain, rel=1e-3)
         side_effect = self._two_fit_side_effect(first_popt, second_popt)
         with patch("fft_cnr.core.curve_fit", side_effect=side_effect):
             result = fft_cnr(y, fit_model="generalized_gaussian")
@@ -401,22 +422,19 @@ class TestGeneralizedGaussianFit:
         first fit, which the screen would keep, is available."""
         N = 64
         x = np.arange(N, dtype=float)
-        y = np.exp(-0.5 * ((x - 31.5) / 8.0) ** 2)
-        usable = np.array([-0.5, 0.0, 3.0, 0.9, 2.0])
+        y = self._gen_gaussian(x, np.array([1.0, 31.5, 8.0, 0.0, 2.0]))
+        passes_screen = np.array([-0.5, 0.0, 3.0, 0.9, 2.0])
         at_bound = np.array([1.0, _GG_CENTER_MIN_TO_LENGTH * N, 8.0, 0.0, 2.0])
-
-        def ssr(popt):
-            z = np.abs((x - popt[1]) / popt[2])
-            return np.sum((y - popt[0] * np.exp(-0.5 * z ** popt[4]) - popt[3]) ** 2)
-
-        assert ssr(at_bound) < ssr(usable)
-        side_effect = self._two_fit_side_effect(usable, at_bound)
+        names = ("amplitude", "center", "sigma", "baseline", "shape")
+        assert _degenerate_gaussian_fit_reason(dict(zip(names, passes_screen)), y) is None
+        assert np.sum((y - self._gen_gaussian(x, at_bound)) ** 2) < np.sum(
+            (y - self._gen_gaussian(x, passes_screen)) ** 2)
+        side_effect = self._two_fit_side_effect(passes_screen, at_bound)
         with patch("fft_cnr.core.curve_fit", side_effect=side_effect):
             result = fft_cnr(y, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
         assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
         assert "gaussian_fit_params" not in result.diagnostics
-
 
 class TestPeakMethod:
     """Tests for the non-parametric peak amplitude estimation path."""
@@ -771,8 +789,7 @@ class TestGridConsistencyRegression:
     def test_generalized_gaussian_unchanged_where_first_start_wins(self):
         """On a profile where the first start reaches the best fit (the second
         start lowers the residual by about 5e-14, far below the 1e-9 margin),
-        the result is bit-identical to a fit from the first start alone, which
-        is the fit of releases before the second start."""
+        the result is bit-identical to a fit from the first start alone."""
         noisy, _ = self._fixed_signal()
         calls = {"n": 0}
 

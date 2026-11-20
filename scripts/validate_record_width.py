@@ -4,10 +4,11 @@ A centered Gaussian (peak 1, zero baseline) sits in a record of half-width
 k = N / (2 sigma) feature standard deviations, in white Gaussian noise of
 standard deviation 1 / CNR, where CNR is the nominal CNR (the simulation input).
 Each k uses three record designs: N = 32 and N = 52 with sigma = N / (2k), and
-sigma = 5 samples with N = 2 round(5k). Python rounds halves to even, so the
-sigma = 5 design runs at N = 16, 24, and 36 for k = 1.5, 2.5, and 3.5, a half
-width of 1.6, 2.4, and 3.6 SD; the by-design table prints each design's actual
-half width. Each (k, design, CNR) cell draws its profiles as one array from
+sigma = 5 samples with N = 2 round(5k), which gives N = 16, 20, 24, 30, 36, and
+40. At k = 1.5 and 3.5, 5k is not a whole number, and at k = 2.5 Python rounds
+12.5 to 12, so that design runs at a half width of 1.6, 3.6, and 2.4 SD there;
+the by-design table prints each design's actual half width. Each (k, design,
+CNR) cell draws its profiles as one array from
 ``np.random.default_rng([35400, ki, ri, ci])`` (indices of k, design, and CNR),
 the seeds of the tables in issue #41.
 
@@ -21,8 +22,10 @@ For each k and CNR, pooled over the designs, the script reports:
 - the median CNR / nominal on the peak path, beside the continuum approximation
   of its noiseless read, ``1 - sqrt(2 pi) [Phi(k) - Phi(k/2)] / (k/2)``: the edge
   baseline (the mean of the outer N // 4 samples) averages the feature over k/2
-  to k SD. On a short record the sampled average differs from it slightly (at
-  N = 32 and k = 4 the noiseless read is 0.964 against 0.972).
+  to k SD. The package's own noiseless read is a little lower on a short
+  record of even length: the middle samples sit half a sample from the
+  feature's center, and the low-pass smooths the peak. At k = 4 it is 0.960,
+  0.969, and 0.967 on the three designs, against 0.972.
 
 A second table gives the wrong-sign share for each design separately.
 

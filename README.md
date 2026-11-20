@@ -141,9 +141,10 @@ extend well beyond the feature: for a Gaussian, a profile 2.7 full widths at
 half maximum (FWHM) long reads the amplitude about 8.5% low, 4.1 FWHM about 1%
 low, and 5.4 FWHM within 0.1%. When the profile cannot be made longer, the
 matched filter does not use this baseline margin and is unaffected. The
-generalized Gaussian fit uses it only for one of its two starting points, but
-it still needs the record to extend beyond most of the feature;
-[Profile length](#profile-length) gives the record width each method needs.
+generalized Gaussian fit uses the edge baseline only to place one of its two
+starting points, but the fit still needs the record to extend beyond most of
+the feature; [Profile length](#profile-length) gives the record width each
+method needs.
 
 Two alternatives are available:
 
@@ -480,10 +481,12 @@ true value.
 
 Narrower records cut into the feature itself. For a centered Gaussian in a
 record of +/-k standard deviations (records of 16 to 52 points, 1800 profiles
-per condition, `scripts/validate_record_width.py`), the generalized Gaussian
-fit reads the median CNR within 3% of the simulated value down to k = 2.5 from
-CNR=8, and down to k = 2 from CNR=13. At CNR=5 it reads 0.97 to 1.06 of the
-simulated value from k = 2.5 to 4. Below k = 2 the fit cannot separate
+per condition, `scripts/validate_record_width.py`; one of its three record
+designs runs at +/-1.6, 2.4, and 3.6 SD for k = 1.5, 2.5, and 3.5), the
+generalized Gaussian fit reads the median CNR within 3% of the simulated value
+down to k = 2.5 from CNR=8, and down to k = 2 from CNR=21 (0.97 at CNR=13). At
+CNR=5 it reads 0.97 to 1.06 of the simulated value from k = 2.5 to 4. Below
+k = 2 the fit cannot separate
 amplitude, baseline, and shape. More fits run away into a flat top as wide as
 the record and are refused, and the refused fits fall back to the peak method.
 At k = 1.5 the median reads 0.63 to 0.81 of the simulated value from CNR=5 to
