@@ -49,6 +49,19 @@ def _lorentzian(N, amplitude, sigma, noise_std, seed):
     return clean + rng.normal(0, noise_std, N), clean
 
 
+def _gaussian_batch(N, amplitude, sigma, noise_std, seed, n_profiles):
+    """Centered Gaussians with the noise of all ``n_profiles`` drawn as one array.
+
+    Returns ``(noisy, clean)`` with ``noisy`` of shape ``(n_profiles, N)``. One
+    generator per batch, unlike the one-seed-per-profile generators above, so a
+    batch reproduces exactly from a single seed (an int or a seed list).
+    """
+    x = np.arange(N, dtype=float)
+    clean = amplitude * np.exp(-0.5 * ((x - (N - 1) / 2.0) / sigma) ** 2)
+    noise = np.random.default_rng(seed).normal(0, noise_std, (n_profiles, N))
+    return clean + noise, clean
+
+
 SHAPES = {
     "Gaussian": lambda N, A, s, ns, seed: _generalized_gaussian(N, A, s, ns, 2.0, seed),
     "Heavy-tailed (p=1.5)": lambda N, A, s, ns, seed: _generalized_gaussian(N, A, s, ns, 1.5, seed),

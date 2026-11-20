@@ -141,9 +141,9 @@ extend well beyond the feature: for a Gaussian, a profile 2.7 full widths at
 half maximum (FWHM) long reads the amplitude about 8.5% low, 4.1 FWHM about 1%
 low, and 5.4 FWHM within 0.1%. When the profile cannot be made longer, the
 matched filter does not use this baseline margin and is unaffected. The
-generalized Gaussian fit does not use it either, but it still needs the record
-to extend beyond most of the feature; [Profile length](#profile-length) gives
-the record width each method needs.
+generalized Gaussian fit uses it only for one of its two starting points, but
+it still needs the record to extend beyond most of the feature;
+[Profile length](#profile-length) gives the record width each method needs.
 
 Two alternatives are available:
 
@@ -478,18 +478,20 @@ the CNR reads 0.95 (matched filter), 0.96 (generalized Gaussian), and 0.92
 (peak, whose amplitude also reads a few percent low on short records) of the
 true value.
 
-Narrower records cut into the feature itself. For a centred Gaussian in a
+Narrower records cut into the feature itself. For a centered Gaussian in a
 record of +/-k standard deviations (records of 16 to 52 points, 1800 profiles
 per condition, `scripts/validate_record_width.py`), the generalized Gaussian
 fit reads the median CNR within 3% of the simulated value down to k = 2.5 from
-CNR=5, and down to k = 2 from CNR=13. Below that the fit cannot separate
+CNR=8, and down to k = 2 from CNR=13. At CNR=5 it reads 0.97 to 1.06 of the
+simulated value from k = 2.5 to 4. Below k = 2 the fit cannot separate
 amplitude, baseline, and shape. More fits run away into a flat top as wide as
 the record and are refused, and the refused fits fall back to the peak method.
 At k = 1.5 the median reads 0.63 to 0.81 of the simulated value from CNR=5 to
 34, and 20% to 35% of fits are refused. The peak method reads its edge baseline
-on the feature's tails whenever k is below about 4: its noiseless read is 0.97,
-0.94, 0.89, 0.80, 0.66, and 0.47 of the true amplitude at k = 4, 3.5, 3, 2.5,
-2, and 1.5 (issue #37). The matched filter does not use the baseline margin.
+on the feature's tails whenever k is below about 4: its noiseless read is about
+0.97, 0.94, 0.89, 0.80, 0.66, and 0.47 of the true amplitude at k = 4, 3.5, 3,
+2.5, 2, and 1.5 (issue #37). The matched filter does not use the baseline
+margin.
 
 ### Precision
 

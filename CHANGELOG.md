@@ -5,7 +5,63 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.2] - 2026-11-19
+## [0.4.2] - 2026-11-20
+
+### Added
+
+- `scripts/validate_record_width.py`: wrong-sign share, median CNR, and
+  fallback share of the generalized-Gaussian path, and the peak path's median
+  beside an approximation of its noiseless read, for a centered Gaussian in
+  records of +/-1.5 to +/-4 SD.
+
+### Changed
+
+- A generalized-Gaussian result changes only where the second start (see
+  Fixed) has a lower residual than the first; elsewhere it is bit-identical to
+  0.4.1. The peak path, the matched filter, `noise_rms`, the intervals of those
+  paths, and the noise model are bit-identical to 0.4.1. With
+  `scripts/compare_release_outputs.py --ref v0.4.1 --allow-fit-changes`, 752
+  peak-path and 724 matched-filter runs are identical. Of 744
+  generalized-Gaussian runs, 470 are identical and 274 change, each to a fit
+  with a lower residual and only in the outputs that follow the fit: 229 reach
+  a lower minimum, 8 converge where 0.4.1's fit failed, and 37 are the same
+  minimum reached from both starts.
+- Those 37 change because the margin by which the second fit must lower the
+  residual (a relative 1e-9) is smaller than the tolerance at which the
+  optimizer stops (1e-8). Two fits of the same minimum can then differ by more
+  than the margin, and the second replaces the first. The amplitude moves by
+  about 1e-5 relative, at most 7e-4.
+- A first fit that fails to converge loses to a second fit that converges. So
+  where 0.4.1 fell back to the peak method because its fit failed, the second
+  fit can now be kept or refused. Where the second start changes whether the
+  fit is kept or falls back, `amplitude_method`,
+  `diagnostics["amplitude_sign_ambiguous"]` (computed on the peak read, and
+  False on a kept fit), `diagnostics["gaussian_fit_params"]`, and
+  `diagnostics["gaussian_fit_rejection_reason"]` change with it.
+- The changes concentrate on records narrower than about +/-3 SD and at low
+  CNR. In the paired simulation reported in #41 (the same profiles on 0.4.1
+  and on this release), on the README interval cells (centered Gaussian,
+  N = 256 and 512, and the +/-4 SD records of 28 to 52 samples) no profile
+  changes by more than 1% from CNR 10, and at CNR 5 at most 4.3% do. At CNR 2,
+  13.5% to 37% change. On flat-topped features (p = 8 and 12), at most 2 of 200
+  profiles per condition change from CNR 3, and 36% to 44% change at CNR 1,
+  where the interval coverage rises from about 0.70 to between 0.93 and 0.95.
+- Two costs, from the same simulation. The generalized-Gaussian path runs a
+  second fit, so its run time roughly doubles on long records. And on records
+  of 32 and 52 samples with no feature, more fits are kept, mostly fits that
+  did not converge from the first start and converge from the second; the
+  median CNR read on pure noise rises by 0.15 to 0.2, the share reading a CNR
+  above 3 by less than 0.01, and the share above 5 not at all.
+- `scripts/compare_release_outputs.py` compares against `v0.4.1` by default,
+  runs every profile on the generalized-Gaussian path too, and adds a seeded
+  batch of record widths and long records. With `--allow-fit-changes` it
+  accepts a generalized-Gaussian difference only when the working tree's fit
+  has a lower sum of squared residuals and only the outputs that follow the fit
+  differ, and it counts accepted changes as same minimum, lower minimum, or a
+  reference fit that failed.
+- The test of a real profile refused by the center rule uses a different seed:
+  on the earlier frame the second start finds a lower-residual fit inside the
+  record.
 
 ### Fixed
 
@@ -15,71 +71,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the profile's median. When the feature fills the record the median lies on
   the feature and that sample is an edge, so the fit could converge to a dip of
   the wrong sign at the edge, a local minimum, and the degenerate-fit screen
-  kept it. For a centred Gaussian in a record of +/-2 standard deviations (SD),
-  19% to 35% of profiles at CNR 5 to 34 returned such a fit. The fit now also
-  starts from the peak read (the largest excursion of the low-pass
+  kept it. For a centered Gaussian in a record of +/-2 standard deviations
+  (SD), 19% to 35% of profiles at CNR 5 to 34 returned such a fit. The fit now
+  also starts from the peak read (the largest excursion of the low-pass
   reconstruction from the edge baseline, at its location, with the baseline at
   the edge level) and keeps the fit with the lower sum of squared residuals.
   The screen and the fallback to the peak method are unchanged.
-- With the fix, in simulation (`scripts/validate_record_width.py`), no kept fit
+
+  With the fix, in simulation (`scripts/validate_record_width.py`), no kept fit
   has the wrong sign on records of +/-2 to +/-4 SD at CNR 5 to 34, nor at
-  +/-1.5 SD from CNR 8 (0.7% at CNR 5). The median CNR stays within 3% of the
-  simulated value down to +/-2.5 SD from CNR 5 and down to +/-2 SD from CNR 13;
-  0.4.1 needed about +/-3 SD. Below +/-2 SD the
-  fit cannot separate amplitude, baseline, and shape: more fits run away into a
-  flat top as wide as the record, are refused, and fall back to the peak
-  method, which reads low there (#37). A record of +/-1.5 SD stays unusable on
-  both paths.
-
-### Changed
-
-- A generalized-Gaussian result changes only where the second start reaches a
-  lower residual; elsewhere it is bit-identical to 0.4.1. Where the second
-  start changes whether the fit is kept or falls back, `amplitude_method`
-  changes with it, and so does `diagnostics["amplitude_sign_ambiguous"]`,
-  which is computed on the peak read and is False on a kept fit. The peak path, the
-  matched filter, `noise_rms`, the intervals of those paths, and the noise
-  model are bit-identical to 0.4.1. With `scripts/compare_release_outputs.py
-  --ref v0.4.1 --allow-fit-changes`, 752 peak-path and 724 matched-filter runs
-  are identical, and of 744 generalized-Gaussian runs 470 are identical and 274
-  change, each to a fit with a lower residual.
-- The changes concentrate on records narrower than about +/-3 SD and at low
-  CNR. On the README interval cells (centred Gaussian, N = 256 and 512, and the
-  +/-4 SD records of 28 to 52 samples), no profile changes by more than 1% from
-  CNR 10, and at CNR 5 only 0% to 4.3% do. At CNR 2, 13.5% to 37% change, and
-  the generalized-Gaussian CNR interval at N = 256 and 512 covers 0.92 to 0.93
-  instead of 0.79 to 0.82 (2000 trials). In the README bias table the
-  generalized-Gaussian range for the Gaussian mixture moves from 1.12--1.16 to
-  1.12--1.17 (1.164 to 1.170 at CNR 3); no other entry changes. On flat-topped features (p = 8 and 12) at most 2 of
-  200 profiles per condition change from CNR 3, and 36% to 44% at CNR 1, where
-  the interval coverage rises from about 0.70 to 0.93 to 0.95.
-- Two costs. The generalized-Gaussian path runs a second fit, so its run time
-  roughly doubles on long records. And on records of 32 and 52 samples with no
-  feature, fits that 0.4.1 refused are kept more often, so the median CNR read
-  on pure noise rises by 0.15 to 0.2; the share reading a CNR above 3 rises by
-  less than 0.01 and the share above 5 does not change.
-- `scripts/compare_release_outputs.py` compares against `v0.4.1` by default,
-  runs every profile on the generalized-Gaussian path too, adds a seeded batch
-  of record widths and long records, and accepts a generalized-Gaussian
-  difference with `--allow-fit-changes` only when the working tree's fit has a
-  lower sum of squared residuals.
-- The test of a real profile refused by the center rule uses a different seed:
-  on the earlier frame the second start finds a better fit inside the record.
-
-### Added
-
-- `scripts/validate_record_width.py`: wrong-sign share, median CNR, and
-  fallback share of the generalized-Gaussian path, and the peak path's median
-  against its noiseless prediction, for a centred Gaussian in records of +/-1.5
-  to +/-4 SD.
+  +/-1.5 SD from CNR 8 (0.7% at CNR 5). From CNR 8 the median CNR stays within
+  3% of the simulated value down to +/-2.5 SD, and from CNR 13 down to
+  +/-2 SD; 0.4.1 needed about +/-3 SD. At CNR 5 the median reads 0.97 to 1.06
+  of the simulated value from +/-2.5 to +/-4 SD, as 0.4.1 does on the wider of
+  those records. Below +/-2 SD the fit cannot separate amplitude, baseline, and
+  shape: more fits run away into a flat top as wide as the record, are
+  refused, and fall back to the peak method, which reads low there (#37). A
+  record of +/-1.5 SD stays unusable on both paths.
 
 ### Documentation
 
 - README "Amplitude estimation": the generalized Gaussian fit is described with
   its two starting points, and it is no longer said to be unaffected by a short
   record. "Profile length" gives the record width each method needs.
-- README "Confidence intervals" and "Bias": the generalized-Gaussian coverage
-  at CNR=2 and the Gaussian-mixture bias range.
+- README "Confidence intervals" and "Bias": the generalized-Gaussian CNR
+  interval at CNR 2 covers 0.92 to 0.93 instead of 0.79 to 0.82 (2000 trials),
+  and the generalized-Gaussian range for the Gaussian mixture moves from
+  1.12--1.16 to 1.12--1.17 (1.164 to 1.170 at CNR 3). No other entry of those
+  tables changes.
 - README "Kinetic traces", rerun on this release with the same simulation and
   seeds: with the generalized Gaussian fit, the single-exponential lifetime
   error goes from 3.2% / 0.8% short to within 0.2% at an initial CNR of 10 /
@@ -489,7 +508,8 @@ This release carries the citation metadata into the published artifact. Version
 - Initial release: FFT-based CNR estimation from single 1-D profiles, with an
   AIC-selected signal/noise frequency boundary and a 95% confidence interval.
 
-[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/thiebes/fft-cnr/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/thiebes/fft-cnr/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/thiebes/fft-cnr/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/thiebes/fft-cnr/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/thiebes/fft-cnr/compare/v0.3.2...v0.3.3
