@@ -480,17 +480,20 @@ the CNR reads 0.95 (matched filter), 0.96 (generalized Gaussian), and 0.92
 true value.
 
 Narrower records cut into the feature itself. For a centered Gaussian in a
-record of +/-k standard deviations (records of 16 to 52 points, 1800 profiles
-per condition, `scripts/validate_record_width.py`; one of its three record
-designs runs at +/-1.6, 2.4, and 3.6 SD for k = 1.5, 2.5, and 3.5), the
-generalized Gaussian fit reads the median CNR within 3% of the simulated value
-down to k = 2.5 from CNR=8, and down to k = 2 from CNR=21 (0.97 at CNR=13). At
-CNR=5 it reads 0.97 to 1.06 of the simulated value from k = 2.5 to 4. Below
-k = 2 the fit cannot separate
-amplitude, baseline, and shape. More fits run away into a flat top as wide as
-the record and are refused, and the refused fits fall back to the peak method.
-At k = 1.5 the median reads 0.63 to 0.81 of the simulated value from CNR=5 to
-34, and 20% to 35% of fits are refused. The peak method reads its edge baseline
+record of +/-k standard deviations (records of 16 to 52 points, 6000 profiles
+per condition, `scripts/validate_record_width.py --trials 2000`; one of its
+three record designs runs at +/-1.6, 2.4, and 3.6 SD for k = 1.5, 2.5, and
+3.5), the generalized Gaussian fit reads the median CNR within about 3% of the
+simulated value down to k = 2.5 from CNR=8 (0.99 to 1.03), and down to k = 2
+from CNR=21 (0.96 at CNR=13). At CNR=5 it reads 0.97 to 1.05 of the simulated
+value from k = 2.5 to 4. These medians include the fits that are refused and
+fall back to the peak method: at k = 2.5, 16% of fits fall back at CNR=5 and
+7% at CNR=8, against 6% and 1% at k = 3. Where that share matters, k = 3 is
+the safer limit. Below k = 2 the fit cannot separate amplitude, baseline, and
+shape. More fits run away into a flat top as wide as the record and are
+refused, and the refused fits fall back to the peak method. At k = 1.5 the
+median reads 0.63 to 0.81 of the simulated value from CNR=5 to 34, and 20% to
+36% of fits are refused. The peak method reads its edge baseline
 on the feature's tails whenever k is below about 4: its noiseless read is about
 0.97, 0.94, 0.89, 0.80, 0.66, and 0.47 of the true amplitude at k = 4, 3.5, 3,
 2.5, 2, and 1.5 (issue #37). The matched filter does not use the baseline

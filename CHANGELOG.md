@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `scripts/validate_record_width.py` prints the fit-path median to three
+  decimals.
+
+### Documentation
+
+- README "Profile length": the record-width figures for the generalized
+  Gaussian fit come from 6000 profiles per condition
+  (`scripts/validate_record_width.py --trials 2000`). The median is within
+  about 3% of the simulated CNR down to +/-2.5 SD from CNR 8, and 0.96 at CNR 13
+  and +/-2 SD. The paragraph gives the share of fits that fall back to the peak
+  method at +/-2.5 and +/-3 SD.
+
 ## [0.4.2] - 2026-11-20
 
 ### Added
