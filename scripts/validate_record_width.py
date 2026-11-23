@@ -126,7 +126,7 @@ def main():
             reasons = Counter(o["reason"] for o in pooled if o["fallback"])
             common = reasons.most_common(1)[0][0] if reasons else "-"
             print(f"+/-{k:<7g} {cnr:>4} {np.mean([o['wrong_sign'] for o in pooled]):>11.3f} "
-                  f"{np.median([o['fit_ratio'] for o in pooled]):>11.2f} "
+                  f"{np.median([o['fit_ratio'] for o in pooled]):>11.3f} "
                   f"{np.mean([o['fallback'] for o in pooled]):>9.3f} "
                   f"{np.median([o['peak_ratio'] for o in pooled]):>12.2f} "
                   f"{_predicted_peak_read(k):>10.3f}  {common}")
