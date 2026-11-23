@@ -21,11 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and +/-2 SD. The paragraph gives the share of fits that fall back to the peak
   method at +/-2.5 and +/-3 SD.
 - The 0.4.2 Fixed entry gives record-width figures from 1800 profiles per
-  condition. At 6000, a few kept fits still have the wrong sign on the
-  narrower records, where 0.4.2 reported none: 1 of 6000 at +/-2 SD and 2 of
-  6000 at +/-2.5 SD at CNR 5, and 4 of 6000 at +/-1.5 SD at CNR 8. The median
-  from CNR 8 reaches 1.03 (at +/-3 SD), reads 0.96 at CNR 13 and +/-2 SD, and
-  at CNR 5 reads 0.97 to 1.04 from +/-2.5 to +/-4 SD.
+  condition. At 6000 (pooled over three record designs, one of which runs at
+  +/-1.6 and +/-2.4 SD where the label says +/-1.5 and +/-2.5 SD), a few kept
+  fits still have the wrong sign on the narrower records, where 0.4.2 reported
+  none: 1 of 6000 at +/-2 SD and 2 of 6000 at +/-2.5 SD at CNR 5, and 4 of
+  6000 at +/-1.5 SD at CNR 8. The median from CNR 8 reaches 1.031 at +/-3 SD,
+  just over the 3% the entry states. It reads 0.96 at CNR 13 and +/-2 SD
+  (0.97 in the entry), and 0.97 to 1.04 at CNR 5 from +/-2.5 to +/-4 SD (0.97
+  to 1.06 in the entry).
 
 ## [0.4.2] - 2026-11-20
 
