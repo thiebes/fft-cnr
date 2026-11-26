@@ -30,7 +30,7 @@ jobs:
           version: "0.13.0"
           enable-cache: false
       - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --group dev
+      - run: uv sync --group dev --locked
       - run: uv run pytest -v
 
   # Build in a job without the OIDC token, so the build backend and its

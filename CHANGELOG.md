@@ -23,9 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   depend on soupsieve, and its releases with fixes for three denial-of-service
   advisories need Python 3.11.5. The lockfile no longer holds soupsieve 2.10.
   The package itself still supports Python 3.10.
+- The test jobs of the CI and publish workflows install with `uv sync --locked`,
+  so a lockfile that no longer matches `pyproject.toml` fails the job instead
+  of being resolved again.
 
 ### Documentation
 
+- The README links to `LICENSE`, `CITATION.cff`, `CONTRIBUTING.md`, and
+  `CODE_OF_CONDUCT.md` by absolute GitHub URL. Relative links do not resolve on
+  PyPI, and `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` are not in the sdist.
+- `CONTRIBUTING.md` has a release-maintenance section: when to regenerate
+  `.github/build-constraints.txt`, and why a newer trove classifier fails the
+  build until it is regenerated.
 - README "Amplitude estimation": a second feature in the profile shifts the
   matched-filter amplitude in proportion to the area under it, because the
   template is mean-subtracted. For a neighbor of equal height 6 SD or more
