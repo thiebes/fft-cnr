@@ -1,10 +1,12 @@
 [build-system]
-requires = ["hatchling"]
+# The release build pins hatchling and its dependencies with hashes in
+# .github/build-constraints.txt; regenerate that file when changing this pin.
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "fft-cnr"
-version = "0.3.1"
+version = "0.4.2"
 description = "FFT-based contrast-to-noise ratio estimation from a single frame"
 readme = "README.md"
 license = "MIT"
@@ -43,10 +45,14 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
+# The validation extra and the validation and assets dependency groups are
+# marked for Python 3.11+, so on 3.10 they install nothing: matplotlib pulls in
+# Pillow, whose security fixes (13.0.0 and later) no longer support 3.10. The
+# package itself still supports 3.10.
 validation = [
-    "jupyter>=1.0",
-    "matplotlib>=3.7",
-    "tqdm>=4.60",
+    "jupyter>=1.0; python_version >= '3.11'",
+    "matplotlib>=3.7; python_version >= '3.11'",
+    "tqdm>=4.60; python_version >= '3.11'",
 ]
 docs = [
     "sphinx>=8.0",
@@ -57,6 +63,21 @@ docs = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/fft_cnr"]
 
+[tool.hatch.build.targets.sdist]
+# Anchored to the project root: unanchored patterns match at any depth and
+# would pick up same-named files under locally ignored directories.
+include = [
+    "/src/fft_cnr",
+    "/tests",
+    "/docs",
+    "/scripts",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/CITATION.cff",
+]
+exclude = ["/docs/_build"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
@@ -65,12 +86,13 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
+# Python 3.11+ only; see [project.optional-dependencies].
 validation = [
-    "jupyter>=1.0",
-    "matplotlib>=3.7",
-    "tqdm>=4.60",
+    "jupyter>=1.0; python_version >= '3.11'",
+    "matplotlib>=3.7; python_version >= '3.11'",
+    "tqdm>=4.60; python_version >= '3.11'",
 ]
 assets = [
-    "matplotlib>=3.7",
-    "curved-text>=0.5.0",
+    "matplotlib>=3.7; python_version >= '3.11'",
+    "curved-text>=0.5.0; python_version >= '3.11'",
 ]

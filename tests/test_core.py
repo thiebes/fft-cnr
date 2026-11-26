@@ -1,11 +1,22 @@
 """Integration tests for FFT-based CNR estimation."""
 
+import dataclasses
+import warnings
 from unittest.mock import patch
 
 import numpy as np
 import pytest
+from scipy.optimize import curve_fit
 
 from fft_cnr import CNREstimate, NoiseModel, fft_cnr
+from fft_cnr.core import (
+    _GG_CENTER_MAX_TO_LENGTH,
+    _GG_CENTER_MIN_TO_LENGTH,
+    _GG_SIGMA_MAX_TO_LENGTH,
+    _degenerate_gaussian_fit_reason,
+    _noise_band_dof,
+    _peak_read,
+)
 
 
 class TestFFTCNR:
@@ -37,11 +48,12 @@ class TestFFTCNR:
         x = rng.normal(0, 1.0, 256)
         result = fft_cnr(x)
         expected_keys = {
-            "N", "window_rms", "dof",
+            "N", "window_rms", "dof", "interval_noise",
             "welch_nperseg", "welch_noverlap", "kept_bins",
         }
         assert expected_keys.issubset(result.diagnostics.keys())
         assert result.diagnostics["N"] == 256
+        assert result.diagnostics["interval_noise"] == "white"
 
     def test_rejects_short_input(self):
         with pytest.raises(ValueError, match="too short"):
@@ -196,6 +208,233 @@ class TestGeneralizedGaussianFit:
         fitted_p = result.diagnostics["gaussian_fit_params"]["shape"]
         assert abs(fitted_p - 3.0) < 1.0
 
+    def test_keeps_flat_top_at_shape_bound(self):
+        """A genuine flat-topped profile whose shape hits its bound is not refused."""
+        signal, _, _, _ = self._make_gen_gaussian_signal(
+            N=512, amplitude=20.0, sigma=40.0, p=12.0, seed=3
+        )
+        result = fft_cnr(signal, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
+        assert result.diagnostics["gaussian_fit_params"]["shape"] == pytest.approx(10.0, abs=0.1)
+
+    @pytest.mark.parametrize("cnr", [1.0, 2.0])
+    @pytest.mark.parametrize("seed", [1, 2, 3, 5])
+    def test_keeps_valid_fit_near_cnr_one(self, cnr, seed):
+        """The degenerate-fit screen must not refuse a fit that tracks the peak
+        at CNR 1 to 2, where a refusal would bias the CNR of frames the fit is
+        meant to serve. Seeds are chosen so the fit centers on the true peak."""
+        signal, _, _, _ = self._make_gen_gaussian_signal(
+            N=241, amplitude=cnr, sigma=20.0, p=2.0, seed=seed
+        )
+        result = fft_cnr(signal, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
+        assert abs(result.diagnostics["gaussian_fit_params"]["center"] - 120.0) < 20.0
+
+    @staticmethod
+    def _record_filling_profiles(n_profiles=100):
+        """A centered Gaussian (peak 1, zero baseline) in a record of +/-2.5 SD,
+        N / (2 sigma) = 2.5, at nominal CNR 8: the reproduction in issue #41."""
+        N, sigma, nominal_cnr = 32, 6.4, 8.0
+        x = np.arange(N, dtype=float)
+        feature = np.exp(-0.5 * ((x - (N - 1) / 2) / sigma) ** 2)
+        noise = np.random.default_rng(2026).normal(0, 1 / nominal_cnr, (n_profiles, N))
+        return feature + noise
+
+    def test_feature_filling_record_keeps_its_sign(self):
+        """When the feature fills the record, the median-baseline start sits on
+        the feature and the farthest sample is an edge. From that start alone,
+        12 of these 100 profiles keep a fit of the wrong sign. No kept fit may
+        have the wrong sign. The floor of 85 kept fits keeps the test from
+        passing by refusing fits instead of fitting them correctly."""
+        results = [
+            fft_cnr(p, fit_model="generalized_gaussian")
+            for p in self._record_filling_profiles()
+        ]
+        kept = [
+            r for r in results
+            if r.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        ]
+        assert len(kept) >= 85
+        assert all(r.amplitude > 0 for r in kept)
+
+    def test_feature_filling_record_reads_its_peak(self):
+        """From the median-baseline start alone, profile 3 of the issue #41
+        reproduction reads amplitude -0.63 (CNR 5.3, center 1.7 at the record
+        edge). The peak-read start reaches the lower-residual fit of the right
+        sign, centered in the record. A deterministic pin: if a change to the
+        fit moves it, rerun scripts/validate_record_width.py."""
+        profile = self._record_filling_profiles()[3]
+        result = fft_cnr(profile, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        params = result.diagnostics["gaussian_fit_params"]
+        assert params["amplitude"] == pytest.approx(0.81906, rel=1e-4)
+        assert 14.0 < params["center"] < 17.0
+        assert result.cnr == pytest.approx(6.9333, rel=1e-4)
+
+    def test_dip_filling_record_mirrors_peak(self):
+        """The starts follow the signed excursion, so a dip is fitted as the
+        mirror image of the peak."""
+        profile = self._record_filling_profiles()[3]
+        peak = fft_cnr(profile, fit_model="generalized_gaussian")
+        dip = fft_cnr(-profile, fit_model="generalized_gaussian")
+        assert dip.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert dip.amplitude == pytest.approx(-peak.amplitude, rel=1e-9)
+        assert dip.cnr == pytest.approx(peak.cnr, rel=1e-9)
+
+    def test_starts_at_median_extreme_then_peak_read(self):
+        """The first start is the sample farthest from the profile's median, with
+        the baseline at the median. The second is the peak read (``_peak_read``):
+        the signed excursion of the low-pass reconstruction from the edge level,
+        at its location, with the baseline at that edge level (the mean of the
+        outer N // 4 samples). Both use width N/10, shape 2, and the same bounds."""
+        profile = self._record_filling_profiles()[3]
+        N = profile.size
+        fits, reads = [], []
+
+        def record_fit(*args, **kwargs):
+            fits.append(kwargs)
+            return curve_fit(*args, **kwargs)
+
+        def record_read(*args):
+            reads.append(_peak_read(*args))
+            return reads[-1]
+
+        with patch("fft_cnr.core.curve_fit", side_effect=record_fit), \
+                patch("fft_cnr.core._peak_read", side_effect=record_read):
+            fft_cnr(profile, fit_model="generalized_gaussian")
+        assert len(fits) == 2 and len(reads) == 1
+        first, second = (np.asarray(call["p0"]) for call in fits)
+
+        median = np.median(profile)
+        k = int(np.argmax(np.abs(profile - median)))
+        assert first[1] == k
+        assert first[0] == pytest.approx(profile[k] - median, rel=1e-12)
+        assert first[3] == pytest.approx(median, rel=1e-12)
+
+        read_baseline, read_excursion, read_idx = reads[0]
+        assert second[1] == read_idx
+        assert second[0] == read_excursion[read_idx] == fft_cnr(profile).amplitude
+        assert second[3] == read_baseline
+        margin = N // 4
+        edge_level = np.mean(np.concatenate([profile[:margin], profile[-margin:]]))
+        assert read_baseline == pytest.approx(edge_level, rel=1e-12)
+
+        for p0 in (first, second):
+            assert p0[2] == N / 10.0
+            assert p0[4] == 2.0
+        for bound_first, bound_second in zip(fits[0]["bounds"], fits[1]["bounds"]):
+            np.testing.assert_array_equal(bound_first, bound_second)
+
+    @staticmethod
+    def _gen_gaussian(x, popt):
+        """The fitted model ``A * exp(-0.5 * |(x - c) / s|**p) + b`` at ``popt``."""
+        amplitude, center, sigma, baseline, shape = popt
+        return amplitude * np.exp(-0.5 * np.abs((x - center) / sigma) ** shape) + baseline
+
+    @staticmethod
+    def _two_fit_side_effect(first, second):
+        """Mocked curve_fit results whose covariances differ (SE 0.1 and 0.2), so
+        the reported standard error shows which fit was kept. An exception in
+        place of a popt makes that call raise it, as a fit that fails."""
+        side_effect = []
+        for popt, se in ((first, 0.1), (second, 0.2)):
+            side_effect.append(popt if isinstance(popt, Exception)
+                               else (popt, np.eye(5) * se**2))
+        return side_effect
+
+    @pytest.mark.parametrize(
+        "first, second, expected_se",
+        [
+            # The first start reaches the minimum: the second does not replace it.
+            ("true", "dip", 0.1),
+            # The second start reaches the lower residual and replaces the first.
+            ("dip", "true", 0.2),
+            # An exact tie: the first fit is kept.
+            ("true", "true", 0.1),
+            # A fit that fails loses to any fit that converges.
+            ("runtime error", "true", 0.2),
+            ("true", "value error", 0.1),
+        ],
+    )
+    def test_second_start_replaces_first_only_when_lower(self, first, second, expected_se):
+        """The fit with the lower sum of squared residuals is kept, the first
+        start wins an exact tie, and a fit that fails (RuntimeError or
+        ValueError from curve_fit) loses to one that converges."""
+        N = 64
+        x = np.arange(N, dtype=float)
+        popts = {
+            "true": np.array([1.0, 31.5, 8.0, 0.0, 2.0]),
+            "dip": np.array([-0.5, 0.0, 3.0, 0.6, 2.0]),
+            "runtime error": RuntimeError("no convergence"),
+            "value error": ValueError("infeasible start"),
+        }
+        y = self._gen_gaussian(x, popts["true"])
+        side_effect = self._two_fit_side_effect(popts[first], popts[second])
+        with patch("fft_cnr.core.curve_fit", side_effect=side_effect):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert result.amplitude == pytest.approx(1.0)
+        assert result.amplitude_se == pytest.approx(expected_se)
+
+    @pytest.mark.parametrize("scale", [1e-3, 1e3])
+    @pytest.mark.parametrize(
+        "relative_gain, expected_se",
+        [
+            # Gain below the 1e-9 margin: the first fit is kept.
+            (1e-11, 0.1),
+            # Gain above the margin: the second fit replaces the first.
+            (1e-7, 0.2),
+        ],
+    )
+    def test_second_start_margin(self, scale, relative_gain, expected_se):
+        """The second fit replaces the first only when its sum of squared
+        residuals is lower by more than a relative 1e-9 (_GG_SECOND_START_RTOL).
+        The two mocked fits differ only in baseline, shifted by the small amount
+        that lowers the residual by ``relative_gain``. The gains bracket the
+        margin by a factor of 100 on each side, so the test fails if the margin
+        moves outside roughly 1e-11 to 1e-7. The profile is scaled by 1e-3 and
+        1e3 so that an absolute margin of 1e-9 fails one of the two scales."""
+        N = 64
+        x = np.arange(N, dtype=float)
+        first_popt = np.array([scale, 31.5, 8.0, 0.05 * scale, 2.0])
+        y = self._gen_gaussian(x, first_popt - np.array([0.0, 0.0, 0.0, 0.05 * scale, 0.0]))
+        y = y + np.random.default_rng(0).normal(0, 0.05 * scale, N)
+        residual = y - self._gen_gaussian(x, first_popt)
+        total, ssr = np.sum(residual), np.sum(residual**2)
+        # sum((r - e)**2) = ssr - 2 e total + N e**2. The root of smaller magnitude,
+        # in a form that keeps its precision when relative_gain is tiny.
+        shift = relative_gain * ssr / (total + np.sign(total) * np.sqrt(total**2 - N * relative_gain * ssr))
+        second_popt = first_popt + np.array([0.0, 0.0, 0.0, shift, 0.0])
+        achieved = 1.0 - np.sum((y - self._gen_gaussian(x, second_popt)) ** 2) / ssr
+        assert achieved == pytest.approx(relative_gain, rel=1e-3)
+        side_effect = self._two_fit_side_effect(first_popt, second_popt)
+        with patch("fft_cnr.core.curve_fit", side_effect=side_effect):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+        assert result.amplitude_se == pytest.approx(expected_se)
+
+    def test_lower_residual_fit_is_screened_after_selection(self):
+        """The fit with the lower residual is chosen first and screened after.
+        Here the second fit has the lower residual but its center is pinned at
+        its bound, so the estimate falls back to the peak read even though the
+        first fit, which the screen would keep, is available."""
+        N = 64
+        x = np.arange(N, dtype=float)
+        y = self._gen_gaussian(x, np.array([1.0, 31.5, 8.0, 0.0, 2.0]))
+        passes_screen = np.array([-0.5, 0.0, 3.0, 0.9, 2.0])
+        at_bound = np.array([1.0, _GG_CENTER_MIN_TO_LENGTH * N, 8.0, 0.0, 2.0])
+        names = ("amplitude", "center", "sigma", "baseline", "shape")
+        assert _degenerate_gaussian_fit_reason(dict(zip(names, passes_screen)), y) is None
+        assert np.sum((y - self._gen_gaussian(x, at_bound)) ** 2) < np.sum(
+            (y - self._gen_gaussian(x, passes_screen)) ** 2)
+        side_effect = self._two_fit_side_effect(passes_screen, at_bound)
+        with patch("fft_cnr.core.curve_fit", side_effect=side_effect):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+        assert "gaussian_fit_params" not in result.diagnostics
 
 class TestPeakMethod:
     """Tests for the non-parametric peak amplitude estimation path."""
@@ -336,20 +575,21 @@ class TestEdgeCases:
             result = fft_cnr(signal + noise, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
         assert np.isfinite(result.cnr)
-        assert "gaussian_fit_rejected" not in result.diagnostics
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
 
     @pytest.mark.parametrize(
-        ("seed", "reason"),
+        "seed",
         [
-            # Flat-topped model as wide as the record: amplitude and baseline
-            # cancel (unrefused: cnr ~1039, amplitude ~994, sigma at N).
-            (125, "amplitude_exceeds_data_range"),
-            # Tail of a narrow feature centred outside the record (unrefused:
+            # Flat-topped model as wide as the profile: amplitude and baseline
+            # cancel (unrefused: cnr ~1039, amplitude ~994, sigma at N). The
+            # amplitude rule is checked first, so it names the refusal.
+            125,
+            # Tail of a narrow feature centered outside the profile (unrefused:
             # cnr ~30, amplitude ~32, center ~-3).
-            (108, "amplitude_exceeds_data_range"),
+            108,
         ],
     )
-    def test_generalized_gaussian_refuses_degenerate_fit(self, seed, reason):
+    def test_generalized_gaussian_refuses_degenerate_fit(self, seed):
         """A runaway fit on a CNR-0.3 frame falls back to the peak read."""
         grid = np.linspace(-6, 6, 241)
         clean = 0.3 * np.exp(-0.5 * grid**2)
@@ -357,33 +597,99 @@ class TestEdgeCases:
         result = fft_cnr(y, fit_model="generalized_gaussian")
         peak = fft_cnr(y, fit_model="peak")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
-        assert result.diagnostics["gaussian_fit_rejected"] == reason
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "amplitude_exceeds_data_range"
+        assert "gaussian_fit_params" not in result.diagnostics
+        assert result.amplitude == pytest.approx(peak.amplitude)
+        assert result.cnr == pytest.approx(peak.cnr)
+        assert result.cnr < 5.0
+
+    def test_generalized_gaussian_refuses_center_at_bound_real_profile(self):
+        """A CNR-0.3 frame whose fit pins its center at the upper bound, half a
+        profile outside the data, falls back to the peak read. Unrefused, the
+        fit reads a negative wing (amplitude about -10.4, fit CNR about 11)
+        under a positive peak. Its amplitude is about 1.65 times the data range
+        and its width about 64 samples, both clear of the other two rules, so
+        only the center rule catches it. Neither start finds a lower-residual
+        fit inside the data on this frame."""
+        N = 241
+        x = np.arange(N, dtype=float)
+        clean = 0.3 * np.exp(-0.5 * ((x - (N - 1) / 2.0) / 20.0) ** 2)
+        y = clean + np.random.default_rng(4137).normal(0, 1, N)
+        result = fft_cnr(y, fit_model="generalized_gaussian")
+        peak = fft_cnr(y, fit_model="peak")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
         assert "gaussian_fit_params" not in result.diagnostics
         assert result.amplitude == pytest.approx(peak.amplitude)
         assert result.cnr == pytest.approx(peak.cnr)
         assert result.cnr < 5.0
 
     def test_generalized_gaussian_refuses_sigma_at_upper_bound(self):
-        """Width pinned at the record length is refused even with an in-range amplitude."""
+        """Width pinned at the profile length is refused even with an in-range amplitude."""
         N = 241
         y = np.random.default_rng(0).normal(0, 1, N)
-        popt = np.array([1.0, 120.0, N - 0.0002, 0.0, 10.0])
+        sigma_max = _GG_SIGMA_MAX_TO_LENGTH * N
+        popt = np.array([1.0, 120.0, sigma_max - 0.0002, 0.0, 10.0])
         with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
             result = fft_cnr(y, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
-        assert result.diagnostics["gaussian_fit_rejected"] == "sigma_at_upper_bound"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "sigma_at_upper_bound"
         assert "gaussian_fit_params" not in result.diagnostics
 
-    def test_generalized_gaussian_keeps_flat_top_at_shape_bound(self):
-        """A genuine flat-topped profile whose shape hits its bound is not refused."""
-        rng = np.random.default_rng(3)
-        N = 512
-        grid = np.arange(N, dtype=float)
-        clean = 20.0 * np.exp(-0.5 * np.abs((grid - N / 2) / 40.0) ** 12)
-        result = fft_cnr(clean + rng.normal(0, 1.0, N), fit_model="generalized_gaussian")
+    @pytest.mark.parametrize(
+        "center_to_length", [_GG_CENTER_MIN_TO_LENGTH, _GG_CENTER_MAX_TO_LENGTH]
+    )
+    def test_generalized_gaussian_refuses_center_at_bound(self, center_to_length):
+        """Center pinned at either fit bound is refused even with an in-range
+        amplitude and width."""
+        N = 241
+        y = np.random.default_rng(0).normal(0, 1, N)
+        popt = np.array([1.0, center_to_length * N, 20.0, 0.0, 2.0])
+        with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+        assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+        assert "gaussian_fit_params" not in result.diagnostics
+
+    def test_generalized_gaussian_keeps_center_outside_profile_short_of_bound(self):
+        """A center outside the profile but short of its bound is kept: a
+        genuine feature can sit at the edge of the data."""
+        N = 241
+        y = np.random.default_rng(0).normal(0, 1, N)
+        popt = np.array([1.0, -10.0, 20.0, 0.0, 2.0])
+        with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
-        assert "gaussian_fit_rejected" not in result.diagnostics
-        assert result.diagnostics["gaussian_fit_params"]["shape"] == pytest.approx(10.0, abs=0.1)
+        assert "gaussian_fit_rejection_reason" not in result.diagnostics
+
+    @pytest.mark.parametrize("bound", ["min", "max"])
+    @pytest.mark.parametrize(
+        "samples_inside, refused", [(0.12, True), (0.48, False)]
+    )
+    def test_generalized_gaussian_center_bound_tolerance(
+        self, bound, samples_inside, refused
+    ):
+        """The center tolerance is 1e-3 of the profile length, 0.241 samples at
+        N=241. A center 0.12 samples inside either bound is refused and one 0.48
+        samples inside is kept. The offsets are fixed in samples, not derived
+        from the constant, so the test fails if the tolerance moves outside
+        roughly 5e-4 to 2e-3 of the profile length."""
+        N = 241
+        y = np.random.default_rng(0).normal(0, 1, N)
+        if bound == "min":
+            center = _GG_CENTER_MIN_TO_LENGTH * N + samples_inside
+        else:
+            center = _GG_CENTER_MAX_TO_LENGTH * N - samples_inside
+        popt = np.array([1.0, center, 20.0, 0.0, 2.0])
+        with patch("fft_cnr.core.curve_fit", return_value=(popt, np.eye(5))):
+            result = fft_cnr(y, fit_model="generalized_gaussian")
+        if refused:
+            assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit_fallback"
+            assert result.diagnostics["gaussian_fit_rejection_reason"] == "center_at_bound"
+            assert "gaussian_fit_params" not in result.diagnostics
+        else:
+            assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
+            assert "gaussian_fit_rejection_reason" not in result.diagnostics
 
     def test_custom_welch_params(self):
         """Custom Welch parameters should be used and reported."""
@@ -415,8 +721,8 @@ class TestEdgeCases:
 class TestGridConsistencyRegression:
     """Pin numerical outputs on a fixed signal to catch silent regressions.
 
-    The estimation pipeline bridges two frequency grids: knee detection and
-    the noise CI run on the coarse Welch PSD grid, while noise extraction and
+    The estimation pipeline bridges two frequency grids: knee detection runs
+    on the coarse Welch PSD grid, while noise extraction, its CI, and the
     amplitude run on the full rFFT grid. The Welch PSD is interpolated to the
     full grid and the knee index is separately scaled across grids. A mismatch
     in those conversions would shift the signal/noise boundary and bias the
@@ -439,9 +745,18 @@ class TestGridConsistencyRegression:
         noisy, _ = self._fixed_signal()
         result = fft_cnr(noisy)
         assert result.cutoff_index == 24
-        assert result.cnr == pytest.approx(19.9876, rel=1e-4)
-        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        assert result.cnr == pytest.approx(19.9901, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.01189, rel=1e-4)
         assert result.amplitude == pytest.approx(20.2278, rel=1e-4)
+
+    def test_noise_interval_values(self):
+        """Pin the noise-interval degrees of freedom and bounds, which come
+        from the full-record estimate and not from the Welch segment count."""
+        noisy, _ = self._fixed_signal()
+        result = fft_cnr(noisy)
+        assert result.diagnostics["dof"] == pytest.approx(403.960, rel=1e-5)
+        assert result.noise_ci95[0] == pytest.approx(0.946668, rel=1e-5)
+        assert result.noise_ci95[1] == pytest.approx(1.086836, rel=1e-5)
 
     def test_matched_filter_cutoff_matches_peak(self):
         """Knee detection is independent of the amplitude method, so the
@@ -453,21 +768,46 @@ class TestGridConsistencyRegression:
     def test_matched_filter_values(self):
         noisy, clean = self._fixed_signal()
         result = fft_cnr(noisy, template=clean)
-        assert result.cnr == pytest.approx(0.97641, rel=1e-4)
+        assert result.cnr == pytest.approx(0.97653, rel=1e-4)
         assert result.amplitude == pytest.approx(0.98814, rel=1e-4)
-        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
-        # Pin the noise-only-whitened standard error: a regression here would
-        # signal the signal-contaminated whitening has crept back in.
-        assert result.amplitude_se == pytest.approx(0.0084777, rel=1e-3)
+        assert result.noise_rms == pytest.approx(1.01189, rel=1e-4)
+        # Pin the exact white-noise standard error of the projection (weights
+        # with their mean removed). A regression here would signal that the
+        # signal-contaminated spectral whitening, or the weights' mean, has
+        # crept back in.
+        assert result.amplitude_se == pytest.approx(0.0084535, rel=1e-3)
 
     def test_generalized_gaussian_values(self):
         noisy, _ = self._fixed_signal()
         result = fft_cnr(noisy, fit_model="generalized_gaussian")
         assert result.diagnostics["amplitude_method"] == "generalized_gaussian_fit"
         assert result.cutoff_index == 24
-        assert result.cnr == pytest.approx(19.7954, rel=1e-4)
+        assert result.cnr == pytest.approx(19.7979, rel=1e-4)
         assert result.amplitude == pytest.approx(20.0333, rel=1e-4)
-        assert result.noise_rms == pytest.approx(1.0120, rel=1e-4)
+        assert result.noise_rms == pytest.approx(1.01189, rel=1e-4)
+
+    def test_generalized_gaussian_unchanged_where_first_start_wins(self):
+        """On a profile where the first start reaches the best fit (the second
+        start lowers the residual by about 5e-14, far below the 1e-9 margin),
+        the result is bit-identical to a fit from the first start alone."""
+        noisy, _ = self._fixed_signal()
+        calls = {"n": 0}
+
+        def second_start_fails(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("second start disabled")
+            return curve_fit(*args, **kwargs)
+
+        with patch("fft_cnr.core.curve_fit", side_effect=second_start_fails):
+            first_only = fft_cnr(noisy, fit_model="generalized_gaussian")
+        result = fft_cnr(noisy, fit_model="generalized_gaussian")
+        assert calls["n"] == 2
+        assert result.cnr == first_only.cnr
+        assert result.cnr_ci95 == first_only.cnr_ci95
+        assert result.amplitude == first_only.amplitude
+        assert result.amplitude_se == first_only.amplitude_se
+        assert result.diagnostics == first_only.diagnostics
 
     def test_noise_rms_independent_of_amplitude_method(self):
         """The noise path never branches on the amplitude method, so all
@@ -479,6 +819,204 @@ class TestGridConsistencyRegression:
             fft_cnr(noisy, fit_model="generalized_gaussian").noise_rms,
         }
         assert len(rms_values) == 1
+
+
+class TestIntervalCalibration:
+    """The noise CI takes the degrees of freedom of the estimate itself.
+
+    sigma**2 is the quadratic form x' W P W x / N of the tapered, band-limited
+    profile, so for white noise its chi-squared degrees of freedom are
+    tr(W P W)**2 / tr((W P W)**2), not twice the Welch segment count. The
+    coverage tests are reduced versions of scripts/validate_interval_coverage.py.
+    """
+
+    N_TRIALS = 400  # binomial standard error at 0.95 is 0.011
+
+    @staticmethod
+    def _explicit_dof(N, kc_full, w, variance=None):
+        """tr(P U)**2 / tr((P U)**2) with an explicit projector P and
+        U = W V W."""
+        eye = np.eye(N)
+        X = np.fft.rfft(eye, axis=0, norm="ortho")
+        X[:kc_full] = 0.0
+        P = np.fft.irfft(X, n=N, axis=0, norm="ortho")
+        v = np.ones(N) if variance is None else variance
+        PU = P @ np.diag(w**2 * v)
+        return np.trace(PU) ** 2 / np.trace(PU @ PU)
+
+    @staticmethod
+    def _gaussian_profile(N, amplitude, seed):
+        grid = np.arange(N, dtype=float)
+        width = 25.0 * N / 512.0
+        clean = amplitude * np.exp(-0.5 * ((grid - (N - 1) / 2.0) / width) ** 2)
+        return clean + np.random.default_rng(seed).normal(0, 1.0, N), clean
+
+    @pytest.mark.parametrize("N", [64, 65])
+    @pytest.mark.parametrize("kc_full", [1, 4, 8, 16])
+    @pytest.mark.parametrize("unequal", [False, True])
+    def test_dof_matches_explicit_quadratic_form(self, N, kc_full, unequal):
+        from scipy.signal.windows import tukey
+
+        w = tukey(N, alpha=0.25)
+        variance = (
+            np.random.default_rng(N + kc_full).uniform(0.2, 5.0, N) if unequal else None
+        )
+        assert _noise_band_dof(w, kc_full, variance) == pytest.approx(
+            self._explicit_dof(N, kc_full, w, variance), rel=1e-10
+        )
+
+    def test_flat_window_dof_counts_kept_components(self):
+        """With no taper the degrees of freedom are the kept real components."""
+        N, kc_full = 128, 10
+        assert _noise_band_dof(np.ones(N), kc_full) == pytest.approx(N - (2 * kc_full - 1))
+
+    def test_dof_is_not_the_welch_segment_count(self):
+        """15 Welch segments at N = 512 would give at most 30."""
+        noisy, _ = self._gaussian_profile(512, 20.0, 0)
+        result = fft_cnr(noisy)
+        assert isinstance(result.diagnostics["dof"], float)
+        assert result.diagnostics["dof"] > 300
+
+    @pytest.mark.parametrize(("N", "amplitude"), [(128, 0.0), (512, 0.0), (512, 20.0)])
+    def test_noise_interval_coverage_white_noise(self, N, amplitude):
+        hits = 0
+        for seed in range(self.N_TRIALS):
+            noisy, _ = self._gaussian_profile(N, amplitude, seed)
+            lo, hi = fft_cnr(noisy).noise_ci95
+            hits += lo <= 1.0 <= hi
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
+
+    @pytest.mark.parametrize("cnr", [2.0, 20.0])
+    def test_matched_filter_cnr_interval_coverage(self, cnr):
+        hits, widths = 0, []
+        for seed in range(self.N_TRIALS):
+            noisy, clean = self._gaussian_profile(512, cnr, seed)
+            # Unit-peak template, so the amplitude is the peak height.
+            lo, hi = fft_cnr(noisy, template=clean / np.max(clean)).cnr_ci95
+            hits += lo <= cnr <= hi
+            widths.append((hi - lo) / cnr)
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
+        if cnr == 20.0:
+            # About 0.14 of the CNR at N = 512, where the noise term dominates.
+            assert np.median(widths) < 0.2
+
+    def test_matched_filter_se_for_a_feature_centered_outside_the_data(self):
+        """The data are demeaned, so the projection's weights in the raw
+        profile have their mean removed. Leaving it in overstated the standard
+        error by about 37% for this template, whose center lies a quarter of
+        the profile before its first sample."""
+        N = 512
+        grid = np.arange(N, dtype=float)
+        shape = np.exp(-0.5 * ((grid + N / 4) / (N / 8)) ** 2)
+        amps, ses, hits = [], [], 0
+        for seed in range(self.N_TRIALS):
+            noisy = 10.0 * shape + np.random.default_rng(seed).normal(0, 1.0, N)
+            result = fft_cnr(noisy, template=shape)
+            amps.append(result.amplitude)
+            ses.append(result.amplitude_se)
+            lo, hi = result.cnr_ci95
+            hits += lo <= 10.0 <= hi
+        assert 0.9 <= np.mean(ses) / np.std(amps) <= 1.1
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
+
+    def test_peak_amplitude_se_is_the_exact_read_se(self):
+        """The peak read is (L x)[i] - mean(edges of x), with L the low-pass
+        projector, so given i its white-noise standard error is
+        sigma * ||L e_i - b||. Rebuild it from an explicit L."""
+        noisy, _ = self._gaussian_profile(256, 10.0, 3)
+        result = fft_cnr(noisy)
+        N, kc = noisy.size, result.cutoff_index
+        X = np.fft.rfft(np.eye(N), axis=0, norm="ortho")
+        X[kc:] = 0.0
+        L = np.fft.irfft(X, n=N, axis=0, norm="ortho")
+        margin = N // 4
+        b = np.zeros(N)
+        b[:margin] = b[-margin:] = 1.0 / (2 * margin)
+        dev = L @ noisy - b @ noisy
+        i = int(np.argmax(np.abs(dev)))
+        assert result.amplitude == pytest.approx(dev[i], rel=1e-10)
+        expected = result.noise_rms * np.linalg.norm(L[:, i] - b)
+        assert result.amplitude_se == pytest.approx(expected, rel=1e-10)
+
+    @pytest.mark.parametrize("cnr", [5.0, 20.0])
+    def test_peak_cnr_interval_coverage(self, cnr):
+        hits = 0
+        for seed in range(self.N_TRIALS):
+            noisy, _ = self._gaussian_profile(512, cnr, seed)
+            lo, hi = fft_cnr(noisy).cnr_ci95
+            hits += lo <= cnr <= hi
+        assert 0.91 <= hits / self.N_TRIALS <= 0.99
+
+    @staticmethod
+    def _poisson_profile(seed, background=10.0, bl_cnr=20.0, N=512, width=20.0):
+        grid = np.arange(N, dtype=float)
+        shape = np.exp(-0.5 * ((grid - (N - 1) / 2.0) / width) ** 2)
+        rate = background + bl_cnr * np.sqrt(background) * shape
+        return np.random.default_rng(seed).poisson(rate).astype(float), shape
+
+    def test_signal_dependent_noise_uses_the_fitted_variance(self):
+        """Under shot noise the detector fires and the intervals switch to the
+        photon-transfer variance: the template weights the peak, where the
+        variance is largest, so the amplitude standard error grows, and
+        unequal variances lower the noise degrees of freedom."""
+        noisy, shape = self._poisson_profile(0)
+        default = fft_cnr(noisy, template=shape)
+        modeled = fft_cnr(noisy, template=shape, estimate_noise_model=True)
+        assert default.diagnostics["interval_noise"] == "white"
+        assert modeled.noise_model.signal_dependent is True
+        assert modeled.diagnostics["interval_noise"] == "signal_dependent"
+        assert modeled.amplitude == default.amplitude
+        assert modeled.noise_rms == default.noise_rms
+        assert modeled.amplitude_se > 1.3 * default.amplitude_se
+        assert modeled.diagnostics["dof"] < default.diagnostics["dof"]
+
+    def test_white_noise_with_noise_model_keeps_white_intervals(self):
+        """When the gain is not significant the intervals are the default ones."""
+        noisy, clean = self._gaussian_profile(512, 20.0, 1)
+        default = fft_cnr(noisy)
+        modeled = fft_cnr(noisy, estimate_noise_model=True)
+        assert modeled.noise_model.signal_dependent is False
+        assert modeled.diagnostics["interval_noise"] == "white"
+        assert modeled.noise_ci95 == default.noise_ci95
+        assert modeled.cnr_ci95 == default.cnr_ci95
+
+
+class TestShortRecordNoise:
+    """A short record around a localized feature, here +/-4 standard
+    deviations of a Gaussian, has a mean well above its edges. Tapered
+    relative to the mean, that offset leaves a
+    pedestal whose Tukey ramps, only N/8 samples long, carry power above the
+    cutoff. The noise path removes the edge level instead, so the pedestal
+    does not read as noise. Before that change the noise-free leak was 0.042,
+    0.020, and 0.0096 of the peak at N = 28, 40, and 52."""
+
+    @staticmethod
+    def _profile(N, amplitude, seed=None):
+        grid = np.arange(N, dtype=float)
+        clean = amplitude * np.exp(-0.5 * ((grid - (N - 1) / 2.0) / (N / 8.0)) ** 2)
+        if seed is None:
+            return clean
+        return clean + np.random.default_rng(seed).normal(0, 1.0, N)
+
+    @pytest.mark.parametrize("N", [28, 40, 52])
+    def test_noise_free_feature_leaves_little_noise(self, N):
+        result = fft_cnr(self._profile(N, 1.0))
+        assert result.noise_rms < 0.006
+
+    @pytest.mark.parametrize("N", [28, 40])
+    def test_noise_level_unbiased_at_high_cnr(self, N):
+        """At CNR 50 the median noise estimate was 2.3 and 1.4 times the true
+        level at N = 28 and 40."""
+        sigmas = [fft_cnr(self._profile(N, 50.0, seed)).noise_rms for seed in range(200)]
+        assert 0.93 <= np.median(sigmas) <= 1.07
+
+    def test_cnr_interval_coverage_at_high_cnr(self):
+        """At N = 40 and CNR 100 the interval covered about 0.11 of the time."""
+        hits = 0
+        for seed in range(TestIntervalCalibration.N_TRIALS):
+            lo, hi = fft_cnr(self._profile(40, 100.0, seed)).cnr_ci95
+            hits += lo <= 100.0 <= hi
+        assert 0.91 <= hits / TestIntervalCalibration.N_TRIALS <= 0.99
 
 
 class TestAmplitudeSNR:
@@ -544,45 +1082,89 @@ class TestNoiseModel:
         result = fft_cnr(rng.normal(0, 1.0, 256))
         assert result.noise_model is None
 
-    def test_peak_snr_pure_shot_noise(self):
-        """With no read floor, peak SNR reduces to sqrt(amplitude / gain)."""
-        model = NoiseModel(
-            read=0.0,
-            gain=0.01,
+    @staticmethod
+    def _model(read, gain, baseline=0.0, baseline_variance=None):
+        return NoiseModel(
+            read=read,
+            gain=gain,
             spectral_exponent=float("nan"),
             white_floor=float("nan"),
-            signal_dependent=True,
+            signal_dependent=None,
             correlated=None,
+            baseline=baseline,
+            baseline_variance=baseline_variance,
         )
-        assert model.peak_snr(100.0) == pytest.approx(100.0)
+
+    def test_field_order_appends_baseline_fields(self):
+        """baseline and baseline_variance are appended last with defaults, so
+        a model built by position with the original six fields still
+        constructs, and its baseline variance follows from gain and read."""
+        names = [f.name for f in dataclasses.fields(NoiseModel)]
+        assert names == [
+            "read",
+            "gain",
+            "spectral_exponent",
+            "white_floor",
+            "signal_dependent",
+            "correlated",
+            "baseline",
+            "baseline_variance",
+        ]
+        model = NoiseModel(2.0, 0.5, float("nan"), float("nan"), False, None)
+        assert model.baseline == 0.0
+        assert model.baseline_variance == 4.0
+        assert self._model(read=2.0, gain=0.5, baseline=10.0).baseline_variance == 9.0
+
+    def test_peak_snr_pure_shot_noise(self):
+        """With no read floor and a zero baseline, peak SNR reduces to
+        sqrt(amplitude / gain)."""
+        assert self._model(read=0.0, gain=0.01).peak_snr(100.0) == pytest.approx(
+            100.0
+        )
 
     def test_peak_snr_pure_read_noise(self):
         """With zero gain, peak SNR reduces to amplitude / read."""
-        model = NoiseModel(
-            read=2.0,
-            gain=0.0,
-            spectral_exponent=float("nan"),
-            white_floor=float("nan"),
-            signal_dependent=False,
-            correlated=None,
-        )
-        assert model.peak_snr(10.0) == pytest.approx(5.0)
+        assert self._model(read=2.0, gain=0.0).peak_snr(10.0) == pytest.approx(5.0)
 
-    def test_peak_snr_negative_amplitude_uses_magnitude(self):
-        """A negative (dip / dark-contrast) amplitude must give the same finite,
-        positive SNR as a peak of equal depth, not a NaN from a negative
-        radicand. The peak amplitude read can return a signed value, and
-        peak_snr is documented as the recommended read on that path."""
-        model = NoiseModel(
-            read=0.0,
-            gain=0.01,
-            spectral_exponent=float("nan"),
-            white_floor=float("nan"),
-            signal_dependent=True,
-            correlated=None,
-        )
-        assert model.peak_snr(-100.0) == pytest.approx(model.peak_snr(100.0))
-        assert np.isfinite(model.peak_snr(-100.0))
+    def test_peak_snr_includes_baseline(self):
+        """The shot noise at the peak comes from the whole signal level there,
+        baseline plus amplitude, not from the amplitude alone."""
+        model = self._model(read=0.0, gain=1.0, baseline=100.0)
+        assert model.peak_snr(100.0) == pytest.approx(100.0 / np.sqrt(200.0))
+
+    def test_peak_snr_detector_offset(self):
+        """A detector offset raises the baseline without adding shot noise:
+        the variance at the baseline is the read floor, and the peak adds
+        only its own photons."""
+        model = self._model(read=2.0, gain=1.0, baseline=1000.0, baseline_variance=4.0)
+        assert model.peak_snr(100.0) == pytest.approx(100.0 / np.sqrt(104.0))
+
+    def test_peak_snr_dip_evaluated_at_its_bottom(self):
+        """A negative (dip / dark-contrast) amplitude is evaluated at the
+        bottom of the dip, where the signal level and its shot noise are
+        lowest, so a dip has a higher SNR than a peak of equal height on the
+        same baseline."""
+        model = self._model(read=0.0, gain=0.01, baseline=300.0)
+        assert model.peak_snr(-100.0) == pytest.approx(100.0 / np.sqrt(2.0))
+        assert model.peak_snr(100.0) == pytest.approx(50.0)
+
+    def test_peak_snr_negative_gain_gives_baseline_value(self):
+        """A negative fitted gain is treated as zero, giving the baseline
+        value, rather than driving the variance negative, which returned NaN
+        with a RuntimeWarning."""
+        model = self._model(read=1.0, gain=-0.5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert model.peak_snr(3.0) == pytest.approx(3.0)
+
+    def test_peak_snr_no_predicted_noise_is_nan(self):
+        """A dip deeper than the baseline's signal level, with no read floor,
+        leaves the model predicting no noise; that is reported as NaN, without
+        a warning."""
+        model = self._model(read=0.0, gain=0.01, baseline=0.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert np.isnan(model.peak_snr(-100.0))
 
 
 class TestNoiseModelDetection:
@@ -654,6 +1236,67 @@ class TestNoiseModelDetection:
         assert 7.0 < snr < 14.0
         assert result.cnr > 2.0 * snr
 
+    def test_baseline_is_peak_read_edge_level(self):
+        """baseline is the edge level the peak read subtracts: the mean of
+        the outer quarter of the samples at each end."""
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy, estimate_noise_model=True)
+        margin = noisy.size // 4
+        edge_level = np.mean(np.concatenate([noisy[:margin], noisy[-margin:]]))
+        assert result.noise_model.baseline == pytest.approx(edge_level, abs=1e-12)
+
+    def test_white_noise_baseline_variance_matches_noise_rms(self):
+        """Under white noise the fitted variance at the baseline and the
+        spectral noise estimate measure the same quantity."""
+        noisy, _ = self._white_noise_signal()
+        result = fft_cnr(noisy, estimate_noise_model=True)
+        assert result.noise_model.baseline_variance == pytest.approx(
+            result.noise_rms**2, rel=0.1
+        )
+
+    def test_peak_snr_detector_offset(self):
+        """Poisson photons (100 at the peak) on a 1000-count detector offset
+        with read noise 2: the offset carries no shot noise, so the fitted
+        intercept is negative and read clips to zero, while the variance at
+        the baseline stays near read**2 = 4 and peak_snr lands near
+        100 / sqrt(104). Medians over a fixed set of profiles, as in the
+        background test."""
+        N = 512
+        x = np.arange(N, dtype=float)
+        shape = np.exp(-0.5 * ((x - (N - 1) / 2.0) / 25.0) ** 2)
+        true_snr = 100.0 / np.sqrt(104.0)
+        snr_ratios = []
+        for seed in range(7):
+            rng = np.random.default_rng(seed)
+            counts = rng.poisson(100.0 * shape) + 1000.0 + rng.normal(0.0, 2.0, N)
+            result = fft_cnr(counts, estimate_noise_model=True)
+            model = result.noise_model
+            assert model.baseline == pytest.approx(1000.0, rel=0.01)
+            assert model.baseline_variance == pytest.approx(4.0, abs=2.0)
+            snr_ratios.append(model.peak_snr(result.amplitude) / true_snr)
+        assert np.median(snr_ratios) == pytest.approx(1.0, abs=0.15)
+
+    def test_peak_snr_on_background(self):
+        """A 100-photon Poisson peak on a 100-photon background: the noise at
+        the peak includes the background's shot noise, so peak_snr lands near
+        A / sqrt(b + A) = 7.07, not near A / sqrt(A) = 10. The level the
+        model is evaluated at is checked per profile; the SNR, which carries
+        the scatter of the fitted gain (about 15% per profile here), by the
+        median over a fixed set of profiles."""
+        N = 512
+        x = np.arange(N, dtype=float)
+        lam = 100.0 + 100.0 * np.exp(-0.5 * ((x - (N - 1) / 2.0) / 25.0) ** 2)
+        true_snr = 100.0 / np.sqrt(200.0)
+        snr_ratios = []
+        for seed in range(7):
+            counts = np.random.default_rng(seed).poisson(lam).astype(float)
+            result = fft_cnr(counts, estimate_noise_model=True)
+            model = result.noise_model
+            assert model.baseline == pytest.approx(100.0, rel=0.05)
+            assert model.baseline + result.amplitude == pytest.approx(200.0, rel=0.05)
+            snr_ratios.append(model.peak_snr(result.amplitude) / true_snr)
+        assert np.median(snr_ratios) == pytest.approx(1.0, abs=0.15)
+
     def test_deterministic_by_default(self):
         noisy, _ = self._white_noise_signal()
         a = fft_cnr(noisy, estimate_noise_model=True)
@@ -676,6 +1319,8 @@ class TestNoiseModelDetection:
         assert model.signal_dependent is None
         assert np.isnan(model.gain)
         assert np.isnan(model.read)
+        assert np.isnan(model.baseline)
+        assert np.isnan(model.baseline_variance)
         assert model.correlated is None
         assert np.isnan(model.spectral_exponent)
         assert np.isnan(model.white_floor)

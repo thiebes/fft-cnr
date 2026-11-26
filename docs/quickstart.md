@@ -38,13 +38,23 @@ edge-estimated baseline, which works for any profile shape. Two alternatives are
 available through {func}`~fft_cnr.fft_cnr`:
 
 ```python
-# With a known noise-free template (matched filter, most precise)
-result = fft_cnr(noisy, template=signal)
+# With a known noise-free template (matched filter, most precise),
+# normalized to a peak of 1 so the amplitude is in signal units
+result = fft_cnr(noisy, template=signal / signal.max())
 
 # With a generalized Gaussian fit (when shape parameters are also wanted)
 result = fft_cnr(noisy, fit_model="generalized_gaussian")
-print(result.diagnostics["gaussian_fit_params"])
+print(result.diagnostics.get("gaussian_fit_params"))  # absent on fallback
 ```
+
+To follow a feature's amplitude across a series of profiles, such as pump-probe
+spectra at successive delays, use the matched filter with a template at the
+feature's known position and width, and read the signed `amplitude`. Once the
+feature has decayed into the noise, the peak method reads a noise excursion of
+either sign, and the magnitude behind `cnr` averages about 1.6 noise standard
+deviations, so a trace built from `cnr` stops decaying at a false floor. The
+[README](https://github.com/thiebes/fft-cnr#kinetic-traces) gives the measured
+errors in fitted lifetimes for each amplitude method.
 
 ## Noise model detection
 

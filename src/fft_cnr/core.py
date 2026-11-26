@@ -28,14 +28,16 @@ class NoiseModel:
     characterize and correct correlated noise. White, signal-independent
     noise is the degenerate case of the real-space axis (zero gain).
 
-    Real-space numeric fields are NaN and ``signal_dependent`` is None until
-    the detector has run, so "not tested" is distinguishable from "tested,
-    not significant"; the spectral-axis fields stay at those sentinels.
+    Real-space numeric fields (``read``, ``gain``, ``baseline``,
+    ``baseline_variance``) are NaN and ``signal_dependent`` is None until the
+    detector has run, so "not tested" is distinguishable from "tested, not
+    significant"; the spectral-axis fields stay at those sentinels.
 
     Attributes
     ----------
     read : float
-        Read-noise floor (intercept of the var-vs-signal fit).
+        Read-noise floor: the square root of the var-vs-signal intercept,
+        clipped at zero.
     gain : float
         Photon-transfer slope (var-vs-signal).
     spectral_exponent : float
@@ -48,6 +50,23 @@ class NoiseModel:
     correlated : bool or None
         Reserved flag for a correlated-noise detector; always None
         (detection deferred, no single-frame correction).
+    baseline : float
+        Signal level of the profile's baseline: the mean of the outer
+        quarter of the samples at each end, the same edge level the peak
+        read subtracts. Defaults to 0 for a model built by hand.
+    baseline_variance : float
+        Fitted noise variance at ``baseline``: ``gain * baseline`` plus the
+        unclipped intercept. Most samples sit near the baseline, so this
+        anchors the fitted line where the data constrain it, not at zero
+        signal, where a detector offset makes the true intercept negative.
+        Derived as ``gain * baseline + read**2`` when not given. It is
+        unclipped, so when the true variance at the baseline is small against
+        its estimation error (a baseline near zero counts with a small read
+        floor) it is zero or negative on a sizeable share of profiles: the
+        floor variance is then not resolved from zero. Treat a non-positive
+        value as zero when forming a floor-referenced level, which makes the
+        floor-referenced CNR ``|amplitude| / sqrt(baseline_variance)`` of that
+        profile unbounded.
     """
 
     read: float
@@ -56,15 +75,35 @@ class NoiseModel:
     white_floor: float
     signal_dependent: bool | None
     correlated: bool | None
+    baseline: float = 0.0
+    baseline_variance: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.baseline_variance is None:
+            self.baseline_variance = self.gain * self.baseline + self.read**2
 
     def peak_snr(self, amplitude: float) -> float:
         """Peak signal-to-noise ratio under the fitted real-space noise model.
 
-        Uses the amplitude magnitude, so a negative (absorption / dark-contrast)
-        amplitude gives the same positive SNR as a peak of equal depth.
+        The noise is the fitted line followed from the baseline to the
+        feature's extremum, ``baseline_variance + gain * amplitude`` with the
+        amplitude signed: a peak is evaluated at its top and a negative
+        (absorption / dark-contrast) feature at its bottom. This holds on a
+        photon background and on a detector offset alike. A negative fitted
+        gain is treated as zero, which gives the baseline value
+        ``|amplitude| / sqrt(baseline_variance)``. Returns NaN when the model
+        predicts no positive variance at the extremum, which can happen when
+        ``baseline_variance`` is not positive (a baseline near zero counts with
+        a small read floor) and the signal term does not lift it above zero.
+
+        A feature that reaches the outer quarters of the profile raises the
+        edge baseline and lowers the peak-path amplitude, so ``peak_snr``
+        reads low by about the amplitude's shortfall (see ``cnr_ci95``).
         """
-        a = abs(amplitude)
-        return float(a / np.sqrt(self.gain * a + self.read**2))
+        variance = self.baseline_variance + np.maximum(self.gain, 0.0) * amplitude
+        if not variance > 0:
+            return float("nan")
+        return float(abs(amplitude) / np.sqrt(variance))
 
 
 @dataclass
@@ -76,22 +115,40 @@ class CNREstimate:
     cnr : float
         Estimated contrast-to-noise ratio.
     cnr_ci95 : tuple[float, float]
-        95% confidence interval on CNR (delta-method approximation).
+        95% confidence interval on CNR (delta-method approximation):
+        ``cnr -/+ 1.96 * sqrt(amplitude_se**2 / noise_rms**2 +
+        amplitude**2 * se_noise**2 / noise_rms**4)``, with ``se_noise`` the
+        half-width of ``noise_ci95`` divided by 1.96. It treats the amplitude
+        and noise estimates as independent. On the peak path it also assumes
+        the feature has decayed within the outer quarters of the profile,
+        where the baseline is read; a feature that reaches them, for example
+        at the profile edge, is read low and the interval does not cover that
+        bias.
     amplitude : float
         Estimated signal amplitude. Signed on the peak and generalized-Gaussian
         paths: negative for a downward (absorption / dark-contrast) feature.
         ``cnr`` uses its magnitude.
     amplitude_se : float
         Standard error of the amplitude estimate (NaN if unavailable). On the
-        matched-filter and generalized-Gaussian paths this is a derived
-        standard error; on the default peak path it is an uncharacterized
-        proxy (``sigma / sqrt(kc_full)``) that understates the true scatter,
-        so it feeds ``cnr_ci95`` (where the noise term dominates) but is not
-        exposed through ``amplitude_snr``.
+        matched-filter path it is the exact standard error of the projection;
+        on the default peak path, the exact standard error of the read given
+        its location (the low-pass reconstruction at the peak minus the edge
+        baseline). Both use white noise of level ``noise_rms``, or the fitted
+        photon-transfer variance when ``estimate_noise_model`` finds
+        signal-dependent noise. On the generalized-Gaussian path it comes from
+        the fit covariance, which understates the scatter near CNR 2. The peak
+        value is conditional on the read location, which moves under noise at
+        low CNR, and at any CNR for a feature at the profile edge; it also
+        omits the baseline bias described under ``cnr_ci95``. It feeds
+        ``cnr_ci95`` but is not exposed through ``amplitude_snr``.
     noise_rms : float
         RMS noise estimated from high-frequency spectral region.
     noise_ci95 : tuple[float, float]
-        95% confidence interval on noise RMS.
+        95% confidence interval on noise RMS: a chi-squared interval on the
+        noise variance, with the effective degrees of freedom of the estimate
+        itself (the tapered, band-limited power of the full record, reported
+        as ``diagnostics["dof"]``). Exact for white Gaussian noise, given the
+        signal/noise boundary.
     cutoff_index : int
         Spectral index separating signal from noise.
     diagnostics : dict
@@ -214,6 +271,69 @@ def _break_knee_loglog(
     return best_k
 
 
+def _noise_band_dof(
+    w: np.ndarray, kc_full: int, variance: np.ndarray | None = None
+) -> float:
+    """Effective chi-squared degrees of freedom of the noise-band power.
+
+    The noise variance estimate is the quadratic form ``x' W P W x / N`` in
+    the profile ``x``, with ``W`` the diagonal taper and ``P`` the projector
+    onto the rFFT bins at and above ``kc_full``. For Gaussian noise with
+    per-sample variances ``V`` (diagonal), its mean is proportional to
+    ``tr(W P W V)`` and its variance to ``2 tr((W P W V)**2)``, so the
+    chi-squared distribution with the same relative variance has
+    ``nu = tr(P U)**2 / tr((P U)**2)`` degrees of freedom, with
+    ``U = W V W``. Both traces are evaluated in the frequency domain, where
+    ``U`` acts as a circular convolution: the first is the kept-bin count
+    times ``mean(u)``, the second sums the squared transform of ``u`` over
+    every pair of kept bins.
+
+    The value is conditional on the cutoff. For white noise (``V``
+    constant) it reduces to the number of kept real spectral components for a
+    flat window, and to about ``N * mean(w**2)**2 / mean(w**4)`` times the
+    kept fraction for a taper whose transform is narrow relative to the kept
+    band. Unequal variances lower it.
+
+    The form ignores the level subtracted before the taper (the record mean,
+    or on the Tukey path the edge level), a rank-one change that moves the
+    degrees of freedom by at most about 1% from N = 28 and under 0.3% from
+    N = 128.
+
+    Parameters
+    ----------
+    w : np.ndarray
+        Taper applied to the profile before the transform.
+    kc_full : int
+        Cutoff index on the full rFFT grid; bins below it are excluded.
+    variance : np.ndarray or None
+        Per-sample noise variance; None for white noise.
+
+    Returns
+    -------
+    float
+        Effective degrees of freedom of the noise variance estimate.
+    """
+    N = w.size
+    u = w**2 if variance is None else w**2 * variance
+    k = np.arange(N)
+    in_band = (np.minimum(k, N - k) >= kc_full).astype(float)
+    u_power = np.abs(np.fft.fft(u) / N) ** 2
+    # Number of kept-bin pairs at each circular frequency separation.
+    pair_counts = np.fft.ifft(np.abs(np.fft.fft(in_band)) ** 2).real
+    trace = float(np.sum(in_band) * np.mean(u))
+    trace_sq = float(np.sum(pair_counts * u_power))
+    if trace_sq <= 0.0:
+        return 1.0
+    return trace**2 / trace_sq
+
+
+def _noise_ci(sigma: float, nu: float) -> tuple[float, float]:
+    """Chi-squared 95% confidence interval on the noise level."""
+    lower = (nu * sigma**2) / chi2.ppf(0.975, nu)
+    upper = (nu * sigma**2) / chi2.ppf(0.025, nu)
+    return (float(np.sqrt(lower)), float(np.sqrt(upper)))
+
+
 class _SpectralDecomposition(NamedTuple):
     """Signal/noise band split of a profile: steps 1-4 of the fft_cnr pipeline.
 
@@ -225,7 +345,7 @@ class _SpectralDecomposition(NamedTuple):
     x_mean: float  # subtracted mean (physical offset)
     w: np.ndarray  # taper window
     w_rms: float
-    X: np.ndarray  # unitary rFFT of the tapered signal
+    X: np.ndarray  # unitary rFFT of the tapered signal (noise path)
     Pxx_full: np.ndarray  # Welch PSD interpolated to the full rFFT grid
     welch_nperseg: int  # resolved segment length
     welch_noverlap: int  # resolved overlap
@@ -233,7 +353,7 @@ class _SpectralDecomposition(NamedTuple):
     x_bp: np.ndarray  # high-frequency residual of the tapered signal
     kept: int  # noise-band bin count
     frac_kept: float  # noise-band fraction (shared attenuation convention)
-    nu: int  # chi-squared degrees of freedom for the noise CI
+    nu: float  # chi-squared degrees of freedom for the noise CI
     sigma: float  # noise RMS
     sigma_ci: tuple[float, float]
     x_lp: np.ndarray  # low-pass reconstruction (pre-window signal estimate)
@@ -254,6 +374,7 @@ def _spectral_decomposition(
 
     # Detrend and taper
     x_mean = float(np.mean(x))
+    x_raw = x
     x = x - x_mean
     if window == "tukey":
         w = tukey(N, alpha=tukey_alpha)
@@ -261,7 +382,21 @@ def _spectral_decomposition(
         w = get_window("hann", N, fftbins=True)
     else:
         w = np.ones(N)
-    xw = x * w
+    # The noise path tapers the profile relative to its edge level, the mean
+    # of the samples under the Tukey ramps. Relative to the record mean, a
+    # localized feature leaves a pedestal that the taper ramps down over
+    # tukey_alpha * N / 2 samples; on a short record that ramp has power
+    # above the cutoff, which would be counted as noise. A Hann ramp spans
+    # the record and confines the pedestal to the lowest bins, and an
+    # untapered pedestal is pure DC, so only the Tukey path needs this.
+    # The demeaned x, which feeds the Welch PSD, the low-pass reconstruction,
+    # and the matched filter, is unchanged.
+    if window == "tukey":
+        ramp = max(1, int(np.ceil(tukey_alpha * N / 2)))
+        edge_level = float(np.mean(np.concatenate((x_raw[:ramp], x_raw[-ramp:]))))
+        xw = (x_raw - edge_level) * w
+    else:
+        xw = x * w
     w_rms = np.sqrt(np.mean(w**2))
 
     # Unitary rFFT
@@ -273,7 +408,7 @@ def _spectral_decomposition(
         welch_nperseg += welch_nperseg % 2  # ensure even
     if welch_noverlap is None:
         welch_noverlap = welch_nperseg // 2
-    Pxx, dof = _welch_psd_unitary(x, welch_nperseg, welch_noverlap, win="hann")
+    Pxx, _ = _welch_psd_unitary(x, welch_nperseg, welch_noverlap, win="hann")
 
     # Interpolate Welch PSD to full FFT frequency grid
     nfft_bins = N // 2 + 1
@@ -303,13 +438,11 @@ def _spectral_decomposition(
         / ((w_rms * np.sqrt(frac_kept)) if w_rms > 0 else 1.0)
     )
 
-    # Confidence interval for sigma via Welch degrees of freedom
-    frac = kept / max(1, len(X_bp))
-    nu = max(2, int(dof * frac))
-    alpha_ci = 0.05
-    lower = (nu * sigma**2) / chi2.ppf(1 - alpha_ci / 2, nu)
-    upper = (nu * sigma**2) / chi2.ppf(alpha_ci / 2, nu)
-    sigma_ci = (np.sqrt(lower), np.sqrt(upper))
+    # Confidence interval for sigma. The degrees of freedom are those of the
+    # estimate itself (the tapered, band-limited power of the full record),
+    # not of the Welch spectrum, which only locates the knee.
+    nu = _noise_band_dof(w, kc_full)
+    sigma_ci = _noise_ci(sigma, nu)
 
     # Low-pass reconstruction of the signal via spectral low-pass filter:
     # FFT the original (pre-window) demeaned signal, zero the noise
@@ -411,6 +544,8 @@ def _estimate_noise_model(
             white_floor=float("nan"),
             signal_dependent=None,
             correlated=None,
+            baseline=float("nan"),
+            baseline_variance=float("nan"),
         )
         reason = (
             "signal range too small relative to the noise to constrain "
@@ -440,6 +575,12 @@ def _estimate_noise_model(
         )
 
     p_value = float((1 + np.sum(null_gains >= gain)) / (_NOISE_MODEL_NULL_DRAWS + 1))
+    # The edge level the peak read subtracts (same margin and expression), and
+    # the fitted variance there with the intercept unclipped: the line is
+    # anchored where most samples sit, not extrapolated to zero signal.
+    margin = max(1, N // 4)
+    x_raw = decomp.x + decomp.x_mean
+    baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
     model = NoiseModel(
         read=float(np.sqrt(max(0.0, read2))),
         gain=gain,
@@ -447,21 +588,39 @@ def _estimate_noise_model(
         white_floor=float("nan"),
         signal_dependent=bool(p_value <= _NOISE_MODEL_TEST_LEVEL),
         correlated=None,
+        baseline=baseline,
+        baseline_variance=gain * baseline + read2,
     )
     return model, {"var_signal_p": p_value}
 
 
-def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, dict]:
+def _fit_generalized_gaussian_amplitude(
+    x: np.ndarray, peak_start: tuple[float, int, float]
+) -> tuple[float, float, dict]:
     """Fit a generalized Gaussian peak + constant baseline to a 1-D profile.
 
     The model is ``A * exp(-0.5 * |z|^p) + baseline`` where ``z = (x - center) / sigma``.
     The shape parameter ``p`` controls kurtosis: p=2 is a standard Gaussian,
     p<2 produces heavy tails, and p>2 produces a flat top.
 
+    The fit runs from two starts and keeps the one with the lower sum of
+    squared residuals. The first puts the baseline at the median of the profile
+    and the peak at the sample farthest from it. When a feature fills the
+    record, the median lies on the feature and the farthest sample is an edge,
+    so from this start the fit can converge to a dip of the wrong sign at that
+    edge, a local minimum. The second start is the peak read: the largest
+    excursion of the low-pass reconstruction from the edge baseline, at its
+    location, with the baseline at the edge level. The second fit replaces the
+    first only when its sum of squared residuals is lower by more than
+    ``_GG_SECOND_START_RTOL``, so where both starts reach the same minimum the
+    first fit is kept unchanged.
+
     Parameters
     ----------
     x : np.ndarray
         Input 1-D profile (original, not demeaned).
+    peak_start : tuple of (float, int, float)
+        Amplitude, index, and baseline of the peak read (``_peak_read``).
 
     Returns
     -------
@@ -485,54 +644,98 @@ def _fit_generalized_gaussian_amplitude(x: np.ndarray) -> tuple[float, float, di
     amplitude_init = float(residual[peak_idx])
     center_init = float(peak_idx)
     sigma_init = float(N) / 10.0
+    read_amplitude, read_idx, read_baseline = peak_start
 
-    p0 = [amplitude_init, center_init, sigma_init, baseline_init, 2.0]
+    starts = (
+        [amplitude_init, center_init, sigma_init, baseline_init, 2.0],
+        [float(read_amplitude), float(read_idx), sigma_init, float(read_baseline), 2.0],
+    )
     bounds = (
-        [-np.inf, -0.5 * N, 0.5, -np.inf, 0.5],
-        [np.inf, 1.5 * N, float(N), np.inf, 10.0],
+        [-np.inf, _GG_CENTER_MIN_TO_LENGTH * N, 0.5, -np.inf, 0.5],
+        [np.inf, _GG_CENTER_MAX_TO_LENGTH * N, _GG_SIGMA_MAX_TO_LENGTH * N, np.inf, 10.0],
     )
 
-    try:
-        popt, pcov = curve_fit(_gen_gaussian, x_grid, x, p0=p0, bounds=bounds)
-        amplitude = float(popt[0])
-        amplitude_se = float(np.sqrt(pcov[0, 0]))
-        fit_params = {
-            "amplitude": float(popt[0]),
-            "center": float(popt[1]),
-            "sigma": float(popt[2]),
-            "baseline": float(popt[3]),
-            "shape": float(popt[4]),
-        }
-        return amplitude, amplitude_se, fit_params
-    except (RuntimeError, ValueError):
+    best_ssr = np.inf
+    best = None
+    for p0 in starts:
+        try:
+            popt, pcov = curve_fit(_gen_gaussian, x_grid, x, p0=p0, bounds=bounds)
+        except (RuntimeError, ValueError):
+            continue
+        ssr = float(np.sum((x - _gen_gaussian(x_grid, *popt)) ** 2))
+        if ssr < best_ssr * (1.0 - _GG_SECOND_START_RTOL):
+            best_ssr, best = ssr, (popt, pcov)
+    if best is None:
         return np.nan, np.nan, {}
+    popt, pcov = best
+    fit_params = {
+        "amplitude": float(popt[0]),
+        "center": float(popt[1]),
+        "sigma": float(popt[2]),
+        "baseline": float(popt[3]),
+        "shape": float(popt[4]),
+    }
+    return fit_params["amplitude"], float(np.sqrt(pcov[0, 0])), fit_params
 
 
 # Degenerate generalized-Gaussian fits on noise-dominated profiles. A fitted
 # amplitude beyond this multiple of the data's peak-to-peak range is not a
-# height present in the data: either a flat-topped model as wide as the record
+# height present in the data: either a flat-topped model as wide as the profile
 # trades amplitude against baseline without limit, or the fit tracks only the
-# tail of a narrow feature outside the record.
+# tail of a narrow feature outside the profile.
 _GG_MAX_AMPLITUDE_TO_PTP = 2.0
+# Upper bound on the generalized-Gaussian width, as a multiple of the profile
+# length. Shared by the fit bounds and the degenerate-fit screen.
+_GG_SIGMA_MAX_TO_LENGTH = 1.0
 # Relative tolerance for treating the fitted width as pinned at its upper bound
-# (the record length), where amplitude and baseline are no longer separable.
+# (_GG_SIGMA_MAX_TO_LENGTH times the profile length), where amplitude and
+# baseline are no longer separable.
 _GG_SIGMA_BOUND_RTOL = 1e-3
+# Bounds on the generalized-Gaussian center, as multiples of the profile
+# length. Shared by the fit bounds and the degenerate-fit screen.
+_GG_CENTER_MIN_TO_LENGTH = -0.5
+_GG_CENTER_MAX_TO_LENGTH = 1.5
+# Tolerance, as a fraction of the profile length, for treating the fitted
+# center as pinned at one of its bounds. A center pinned there places the
+# fitted feature half a profile length outside the data, where the data do not
+# constrain its amplitude: on a noise-dominated profile it is a broad wing,
+# often of the wrong sign; on a feature at the profile edge it is usually a
+# fit of the correct sign whose peak lies beyond the edge.
+_GG_CENTER_BOUND_TOL_TO_LENGTH = 1e-3
+# Relative margin by which the second generalized-Gaussian start (the peak
+# read) must lower the sum of squared residuals to replace the first fit. Two
+# starts that converge to the same minimum differ only at the optimizer's
+# tolerance, and the first fit is then kept unchanged.
+_GG_SECOND_START_RTOL = 1e-9
 
 
 def _degenerate_gaussian_fit_reason(fit_params: dict, x: np.ndarray) -> str | None:
     """Name why a generalized-Gaussian fit is degenerate, or None if it is usable.
 
     Only fits that cannot describe a feature in the data are refused. Shape at
-    its bound and a center outside the record are deliberately not tested:
-    both occur on genuine flat-topped and low-CNR profiles, and refusing them
-    would bias the CNR in the regime the fit is meant to serve.
+    its bound and a center outside the profile but short of its bound are
+    deliberately not tested: both occur on genuine flat-topped and low-CNR
+    profiles, and refusing them would bias the CNR in the regime the fit is
+    meant to serve. A center pinned at its own bound, half a profile length
+    outside the data, is refused. The conditions are tested in the order
+    amplitude, width, center, and only the first that applies is named.
     """
     if not fit_params:
         return None
+    N = x.size
     if abs(fit_params["amplitude"]) > _GG_MAX_AMPLITUDE_TO_PTP * np.ptp(x):
         return "amplitude_exceeds_data_range"
-    if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * x.size:
+    sigma_max = _GG_SIGMA_MAX_TO_LENGTH * N
+    if fit_params["sigma"] >= (1.0 - _GG_SIGMA_BOUND_RTOL) * sigma_max:
         return "sigma_at_upper_bound"
+    center_tol = _GG_CENTER_BOUND_TOL_TO_LENGTH * N
+    center_min = _GG_CENTER_MIN_TO_LENGTH * N
+    center_max = _GG_CENTER_MAX_TO_LENGTH * N
+    if (
+        fit_params["center"] <= center_min + center_tol
+        or fit_params["center"] >= center_max - center_tol
+    ):
+        return "center_at_bound"
     return None
 
 
@@ -561,6 +764,44 @@ _MIN_ROI_SPAN = 16
 _NOISE_MODEL_NULL_DRAWS = 199
 _NOISE_MODEL_TEST_LEVEL = 0.05
 _NOISE_MODEL_MIN_RANGE_SIGMAS = 3.0
+
+
+def _peak_read(x_raw: np.ndarray, x_lp_raw: np.ndarray) -> tuple[float, np.ndarray, int]:
+    """Edge baseline, low-pass excursion from it, and the read location.
+
+    The baseline is the mean of the outer ``N // 4`` samples at each end of the
+    raw profile. The read location is the largest-magnitude excursion of the
+    low-pass reconstruction from that baseline, so a negative (absorption /
+    dark-contrast) feature is read with its sign. Shared by the peak path and
+    the second start of the generalized-Gaussian fit.
+    """
+    margin = max(1, x_raw.size // 4)
+    baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
+    excursion = x_lp_raw - baseline
+    return baseline, excursion, int(np.argmax(np.abs(excursion)))
+
+
+def _peak_read_weights(N: int, peak_idx: int, kc_full: int, margin: int) -> np.ndarray:
+    """Weights ``a`` with the peak-path amplitude equal to ``a' x``.
+
+    The peak read is the low-pass reconstruction at ``peak_idx`` minus the
+    mean of the ``margin`` samples at each end of the raw profile. The
+    low-pass keeps the DC bin, so the subtracted profile mean cancels and the
+    read is linear in the raw profile with ``a = L e_i - b``: ``L e_i`` is the
+    low-pass of a unit impulse at the read location, ``b`` the edge average.
+    Given the location, the read's variance is ``sum(a**2 * v)`` for
+    per-sample noise variances ``v``, and ``sigma**2 * sum(a**2)`` for white
+    noise. The location itself moves under noise at low CNR, which this
+    conditional variance does not include.
+    """
+    impulse = np.zeros(N)
+    impulse[peak_idx] = 1.0
+    spectrum = np.fft.rfft(impulse, norm="ortho")
+    spectrum[kc_full:] = 0.0
+    weights = np.fft.irfft(spectrum, n=N, norm="ortho")
+    weights[:margin] -= 1.0 / (2 * margin)
+    weights[-margin:] -= 1.0 / (2 * margin)
+    return weights
 
 
 def _feature_peak_and_width(x_lp: np.ndarray) -> tuple[int, int]:
@@ -730,10 +971,7 @@ def fft_cnr(
     template : np.ndarray or None
         Expected signal shape for matched-filter amplitude estimation.
         If None, amplitude is estimated using the method specified by
-        ``fit_model`` (default: ``"peak"``). The template is mean-subtracted
-        before the projection, so any other feature in the window shifts the
-        amplitude in proportion to its own amplitude; use explicit ``roi``
-        bounds that exclude such a neighbour, including its tails.
+        ``fit_model`` (default: ``"peak"``).
     fit_model : str or None
         Amplitude estimation method when no template is provided.
         ``"peak"`` (default) applies a spectral low-pass filter and
@@ -741,23 +979,32 @@ def fft_cnr(
         arbitrary profile shapes. ``"generalized_gaussian"`` fits a
         5-parameter generalized Gaussian with a shape exponent that
         accommodates non-zero excess kurtosis, providing fitted
-        parameters (center, width, shape) in diagnostics. A fit that fails,
+        parameters (center, width, shape) in diagnostics. The fit starts
+        from the sample farthest from the profile's median and from the
+        peak read, and keeps the fit with the lower sum of squared
+        residuals; the second start keeps a feature that fills most of the
+        record from being fitted as a dip of the wrong sign. A fit that fails,
         or that is degenerate (fitted amplitude more than twice the data's
-        peak-to-peak range, or width pinned at the record length), falls back
-        to the peak method; a refusal is named in
-        ``diagnostics["gaussian_fit_rejected"]``.
+        peak-to-peak range, width pinned at the profile length, or center
+        pinned at its bound, half a profile length outside the data), falls
+        back to the peak method; a refusal is named in
+        ``diagnostics["gaussian_fit_rejection_reason"]``.
         Ignored when ``template`` is given.
     window : str
         Tapering window: ``"tukey"``, ``"hann"``, or ``"none"``.
     tukey_alpha : float
         Shape parameter for the Tukey window (0 = rectangular, 1 = Hann).
+        The noise estimate tapers the profile relative to the mean of the
+        ``max(1, ceil(tukey_alpha * N / 2))`` samples at each end (the samples
+        under the taper ramps), so that a feature's offset above the edges is
+        not ramped into the noise band.
     welch_nperseg : int or None
         Segment length for Welch PSD estimation. Defaults to max(16, N//8).
         With 50% overlap this heuristic produces approximately 15 Welch
-        segments at any signal length, giving consistent degrees of freedom
-        for the noise confidence interval. Longer segments reduce the segment
-        count and widen the noise CI substantially without improving CNR
-        accuracy.
+        segments at any signal length. The Welch spectrum only locates the
+        signal/noise boundary; the noise level and its confidence interval
+        come from the full-record transform, so the segment length affects
+        them only through the boundary it selects.
     welch_noverlap : int or None
         Overlap for Welch segments. Defaults to nperseg // 2.
     cutoff_guard : tuple[float, float]
@@ -781,8 +1028,11 @@ def fft_cnr(
         read**2) to the residual, test the fitted gain for significance
         against a null calibrated through this same pipeline, and attach
         the result as ``noise_model``.  Works with every amplitude method.
-        Adds a Monte Carlo cost of about 200 re-runs of the spectral
-        decomposition.
+        When the gain is significant (``signal_dependent`` True), the fitted
+        variance replaces the white-noise forms in ``noise_ci95``,
+        ``amplitude_se`` (peak and matched-filter paths), and ``cnr_ci95``,
+        which under shot noise would otherwise undercover. Adds a Monte Carlo
+        cost of about 200 re-runs of the spectral decomposition.
     rng : numpy.random.Generator or None
         Random generator for the noise-model null calibration.  None
         (default) uses a fixed seed, so repeated calls on the same input
@@ -809,6 +1059,16 @@ def fft_cnr(
         magnitude rivals it, so the largest-magnitude read could switch features
         (and flip the amplitude sign) under noise. It is False on the
         matched-filter path, where the template fixes the feature.
+
+        When ``fit_model="generalized_gaussian"`` refuses a degenerate fit, the
+        diagnostics carry ``gaussian_fit_rejection_reason``, naming the reason:
+        ``"amplitude_exceeds_data_range"``, ``"sigma_at_upper_bound"``, or
+        ``"center_at_bound"``. When several conditions apply, the first in
+        that order is named. The key is absent when the fit is kept or fails.
+
+        ``interval_noise`` names the noise the intervals assume: ``"white"``,
+        or ``"signal_dependent"`` when ``estimate_noise_model`` found
+        signal-dependent noise and its fitted variance was used.
 
     Raises
     ------
@@ -876,6 +1136,7 @@ def fft_cnr(
     sigma_ci = d.sigma_ci
     x_lp = d.x_lp
 
+    nu = d.nu
     noise_model = None
     noise_model_diags: dict = {}
     if estimate_noise_model:
@@ -888,9 +1149,21 @@ def fft_cnr(
             fallback_cut_frac=fallback_cut_frac,
         )
 
+    # Per-sample noise variance for the intervals. The white-noise forms are
+    # exact when the noise is white; when the detector finds signal-dependent
+    # noise, the fitted photon-transfer variance replaces them in the noise
+    # degrees of freedom and in the amplitude standard error.
+    variance = None
+    if noise_model is not None and noise_model.signal_dependent:
+        variance = np.clip(
+            noise_model.gain * (x_lp + x_mean) + noise_model.read**2, 0.0, None
+        )
+        nu = _noise_band_dof(w, kc_full, variance)
+        sigma_ci = _noise_ci(sigma, nu)
+
     # Amplitude estimation
     gfit_params: dict = {}
-    gfit_rejected: str | None = None
+    gfit_rejection_reason: str | None = None
     if template is not None:
         t = np.asarray(template, float).ravel()
         if t.size != N:
@@ -915,16 +1188,29 @@ def fft_cnr(
                 "(constant template); the matched filter is undefined."
             )
         Amp = float(np.sum(xw * tw) / denom)
-        # Exact standard error of the projection under white noise of level
-        # sigma: var(Amp) = sigma**2 * sum(w**2 * tw**2) / denom**2, which
-        # reduces to the textbook sigma / ||t|| when the window is flat.
-        Amp_se = float(sigma * np.sqrt(np.sum((w * tw) ** 2)) / denom)
+        # Exact standard error of the projection. The data are demeaned, so
+        # Amp is linear in the raw profile with weights w * tw minus their
+        # mean. Under white noise of level sigma, var(Amp) = sigma**2 *
+        # sum(weights**2) / denom**2, which reduces to the textbook
+        # sigma / ||t|| when the window is flat. With per-sample variances v
+        # it is sum(weights**2 * v) / denom**2. Leaving out the mean of the
+        # weights would overstate the error, by several percent for a feature
+        # at the profile edge and by more for one centered outside the data.
+        weights = w * tw
+        weights = weights - np.mean(weights)
+        if variance is None:
+            Amp_se = float(sigma * np.sqrt(np.sum(weights**2)) / denom)
+        else:
+            Amp_se = float(np.sqrt(np.sum(weights**2 * variance)) / denom)
         amp_method = "matched_filter"
     elif fit_model == "generalized_gaussian":
         x_raw = x + x_mean
-        Amp, Amp_se, gfit_params = _fit_generalized_gaussian_amplitude(x_raw)
-        gfit_rejected = _degenerate_gaussian_fit_reason(gfit_params, x_raw)
-        if gfit_rejected is not None:
+        read_baseline, read_excursion, read_idx = _peak_read(x_raw, x_lp + x_mean)
+        Amp, Amp_se, gfit_params = _fit_generalized_gaussian_amplitude(
+            x_raw, (float(read_excursion[read_idx]), read_idx, read_baseline)
+        )
+        gfit_rejection_reason = _degenerate_gaussian_fit_reason(gfit_params, x_raw)
+        if gfit_rejection_reason is not None:
             gfit_params = {}
         if not gfit_params:
             amp_method = "generalized_gaussian_fit_fallback"
@@ -937,14 +1223,13 @@ def fft_cnr(
     amplitude_sign_ambiguous = False
     if amp_method in ("peak", "generalized_gaussian_fit_fallback"):
         margin = max(1, N // 4)
-        x_raw = x + x_mean
-        baseline = float(np.mean(np.concatenate([x_raw[:margin], x_raw[-margin:]])))
-        # Read the largest-magnitude excursion from the baseline so a negative
-        # (absorption / dark-contrast) feature is measured with the right sign;
-        # for a positive peak this is the peak height, unchanged.
-        dev = (x_lp + x_mean) - baseline
-        Amp = float(dev[int(np.argmax(np.abs(dev)))])
-        Amp_se = float(sigma / np.sqrt(max(1, kc_full)))
+        _, dev, peak_idx = _peak_read(x + x_mean, x_lp + x_mean)
+        Amp = float(dev[peak_idx])
+        weights = _peak_read_weights(N, peak_idx, kc_full, margin)
+        if variance is None:
+            Amp_se = float(sigma * np.sqrt(np.sum(weights**2)))
+        else:
+            Amp_se = float(np.sqrt(np.sum(weights**2 * variance)))
         # Flag when an opposite-sign excursion rivals the chosen feature: the
         # largest-magnitude read could then switch features (and flip the sign)
         # under noise, and a localized rival does not trip lowfreq_dominated.
@@ -983,7 +1268,8 @@ def fft_cnr(
     diags: dict = {
         "N": N,
         "window_rms": d.w_rms,
-        "dof": d.nu,
+        "dof": nu,
+        "interval_noise": "white" if variance is None else "signal_dependent",
         "welch_nperseg": d.welch_nperseg,
         "welch_noverlap": d.welch_noverlap,
         "kept_bins": d.kept,
@@ -996,8 +1282,8 @@ def fft_cnr(
         diags["roi"] = roi_bounds
     if gfit_params:
         diags["gaussian_fit_params"] = gfit_params
-    if gfit_rejected is not None:
-        diags["gaussian_fit_rejected"] = gfit_rejected
+    if gfit_rejection_reason is not None:
+        diags["gaussian_fit_rejection_reason"] = gfit_rejection_reason
     if return_bandpassed_noise:
         diags["x_bp"] = d.x_bp
     diags.update(noise_model_diags)
