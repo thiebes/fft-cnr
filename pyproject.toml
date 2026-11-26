@@ -48,8 +48,10 @@ dev = [
 # The validation and docs extras and the validation dependency group are marked
 # for Python 3.11.5+, and the assets group for 3.11+, so on older Pythons they
 # install nothing. matplotlib pulls in Pillow, whose security fixes (13.0.0 and
-# later) no longer support 3.10. jupyter and pydata-sphinx-theme pull in
-# soupsieve, whose fixed releases need 3.11.5. The package itself still
+# later) no longer support 3.10. jupyter and pydata-sphinx-theme depend on
+# soupsieve, whose fixed releases need 3.11.5. The other entries of each extra
+# carry the same marker so that an extra installs whole or not at all (sphinx
+# without the theme would break the docs build). The package itself still
 # supports 3.10.
 validation = [
     "jupyter>=1.0; python_full_version >= '3.11.5'",
