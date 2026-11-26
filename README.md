@@ -4,7 +4,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/fft-cnr.svg)](https://pypi.org/project/fft-cnr/)
 [![Tests](https://github.com/thiebes/fft-cnr/actions/workflows/test.yml/badge.svg)](https://github.com/thiebes/fft-cnr/actions/workflows/test.yml)
 [![Docs](https://readthedocs.org/projects/fft-cnr/badge/?version=latest)](https://fft-cnr.readthedocs.io/en/latest/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/thiebes/fft-cnr/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20691435.svg)](https://doi.org/10.5281/zenodo.20691435)
 
 FFT-based contrast-to-noise ratio estimation from a single frame.
@@ -624,8 +624,9 @@ which always resolves to the latest release, and report the version you used
 }
 ```
 
-Citation metadata is in [CITATION.cff](CITATION.cff); GitHub's "Cite this
-repository" button generates APA and BibTeX from it.
+Citation metadata is in
+[CITATION.cff](https://github.com/thiebes/fft-cnr/blob/main/CITATION.cff);
+GitHub's "Cite this repository" button generates APA and BibTeX from it.
 
 ## Background
 
@@ -650,7 +651,7 @@ established separately (Foi et al., 2008); this package folds a photon-transfer
 fit into the spectral decomposition it already computes rather than
 reimplementing that method. Full references with DOIs are listed under
 [References](#references) below; machine-readable citation metadata is in
-[CITATION.cff](CITATION.cff).
+[CITATION.cff](https://github.com/thiebes/fft-cnr/blob/main/CITATION.cff).
 
 ## References
 
@@ -695,9 +696,10 @@ non-Gaussian transport profiles that informed the design of this package.
 ## Contributing and community
 
 Contributions, bug reports, and feature requests are welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for development setup, how to run the tests,
-and how to submit changes. Participation is governed by the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+[CONTRIBUTING.md](https://github.com/thiebes/fft-cnr/blob/main/CONTRIBUTING.md)
+for development setup, how to run the tests, and how to submit changes.
+Participation is governed by the
+[Code of Conduct](https://github.com/thiebes/fft-cnr/blob/main/CODE_OF_CONDUCT.md).
 
 ## Development disclosure
 
@@ -717,5 +719,6 @@ reported under [Accuracy](#accuracy).
 
 ## License
 
-Released under the MIT License; see the [LICENSE](LICENSE) file for the full
-text.
+Released under the MIT License; see the
+[LICENSE](https://github.com/thiebes/fft-cnr/blob/main/LICENSE) file for the
+full text.
