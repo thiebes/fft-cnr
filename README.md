@@ -370,14 +370,16 @@ Two tools address this:
   baseline structure. Pass explicit `(start, stop)` bounds, or `"auto"` to size
   a window to the peak. `"auto"` locates the largest feature, so pass explicit
   bounds when an off-center baseline is larger than the peak of interest.
-  `"auto"` makes the window about 2.2 to 3 FWHM wide, narrower than the 5.4
-  FWHM the peak method's edge baseline needs (see
+  For a feature of SD 3 samples or more, `"auto"` makes the window about 2.1 to
+  3 FWHM wide (never under 17 samples). That is narrower than the 5.4 FWHM the
+  peak method's edge baseline needs to read within 0.1% (see
   [Amplitude estimation](#amplitude-estimation)). For a centered Gaussian of
-  SD 10 to 40 samples at CNR 20, the peak method reads the amplitude 12% to 16%
-  low with `"auto"`, against within 2% on the full record. With the peak
-  method, pass explicit bounds at least 5.4 FWHM wide (within 1% in the same
-  simulation), or use the matched filter, which reads within 1% with `"auto"`
-  (`scripts/validate_roi_auto.py`).
+  SD 10 to 40 samples in a record of 512 at CNR 20, the peak method reads the
+  amplitude 12% to 16% low with `"auto"`, while on the full record it reads
+  within 2%. In the same simulation, explicit bounds 5.4 FWHM wide and the
+  matched filter with `"auto"` both read within 1%. At CNR 5 the explicit
+  bounds read 3% to 6% high at SD 5 to 20, and the matched filter with
+  `"auto"` within 3% (`scripts/validate_roi_auto.py`).
 
 This guard is calibrated for smooth, low-order baselines. Broadband structured
 background is a different problem. The residual speckle and fringe field left

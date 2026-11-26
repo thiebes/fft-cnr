@@ -37,10 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A neighbor whose tail reaches into the window is not excluded, and the window
   can make its shift larger.
 - README "Low-frequency baseline and structured background": the `roi="auto"`
-  window (about 2.2 to 3 FWHM) is too narrow for the peak method's edge
-  baseline. For a Gaussian of SD 10 to 40 samples at CNR 20, the peak method
-  reads 12% to 16% low with it, against within 2% on the full record. Explicit
-  bounds at least 5.4 FWHM wide, or the matched filter, read within 1%.
+  window (about 2.1 to 3 FWHM for a feature of SD 3 samples or more) is too
+  narrow for the peak method's edge baseline. For a Gaussian of SD 10 to 40
+  samples in a record of 512 at CNR 20, the peak method reads 12% to 16% low
+  with it, while the full record reads within 2%. Explicit bounds 5.4 FWHM
+  wide, or the matched filter, read within 1% there; at CNR 5 the explicit
+  bounds read 3% to 6% high.
 - README "Profile length": the record-width figures for the generalized
   Gaussian fit come from 6000 profiles per condition
   (`scripts/validate_record_width.py --trials 2000`). The median is within
