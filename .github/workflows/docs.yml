@@ -18,4 +18,4 @@ jobs:
         with:
           version: "0.13.0"
       - run: uv python install 3.13
-      - run: uv run --extra docs sphinx-build -W -b html docs docs/_build/html
+      - run: uv run --locked --extra docs sphinx-build -W -b html docs docs/_build/html
