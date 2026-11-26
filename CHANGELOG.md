@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/validate_template_neighbour.py`: the shift of the matched-filter
+  amplitude caused by a neighbouring Gaussian, on the full record and with
+  `roi` at +/-3 SD around the target.
+
 ### Changed
 
 - `scripts/validate_record_width.py` prints the fit-path median to three
@@ -14,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- README "Matched filter": a second feature inside the window shifts the
+  matched-filter amplitude in proportion to its own height, because the
+  template is mean-subtracted. Explicit `roi` bounds that exclude a neighbour
+  6 SD or more away remove the shift; a neighbour whose tail stays inside the
+  window is not removed, and the shorter window can make the shift larger.
 - README "Profile length": the record-width figures for the generalized
   Gaussian fit come from 6000 profiles per condition
   (`scripts/validate_record_width.py --trials 2000`). The median is within
