@@ -154,6 +154,22 @@ Two alternatives are available:
   template matches the true shape; a mismatched template biases the amplitude.
   The amplitude is in units of the template's peak, so normalize the template
   to a peak of 1 to read the amplitude, and the CNR, in signal units.
+  The template is mean-subtracted before the projection, so it is negative away
+  from the target, and any other feature in the profile shifts the amplitude in
+  proportion to the area under that feature; a neighbor of the same sign lowers
+  it. For a Gaussian target with a standard deviation (SD) of 10 samples in a
+  record of 512, a neighbor of the same width and height 6 SD or more away
+  lowers the amplitude by about 9%, and one three times as high by about 26%.
+  For equal heights the shift grows with the width of the features, about 4% at
+  SD 5 and 19% at SD 20, and it roughly halves each time the record length
+  doubles: about 19% at N=256 and 2% at N=2048 at SD 10. To remove it, set
+  `roi` to explicit bounds that exclude the neighbor and its tails. For a
+  neighbor of equal height 6 SD or more away, a window of +/-3 SD around the
+  target leaves under 0.1%, at the cost of 1.5 to 1.6 times the scatter of the
+  amplitude. A neighbor whose tail reaches into the window is not excluded, and
+  the window can then make the shift larger: for a neighbor of equal height
+  4 SD away it leaves about 13%, compared with 2%, 7%, and 17% on the full
+  record at SD 5, 10, and 20 (`scripts/validate_template_neighbor.py`).
 
 - **Generalized Gaussian fit** (`fit_model="generalized_gaussian"`): fits a
   5-parameter model with a shape exponent that covers profiles from heavy-tailed
