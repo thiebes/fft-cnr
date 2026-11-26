@@ -45,19 +45,23 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
-# The validation extra and the validation and assets dependency groups are
-# marked for Python 3.11+, so on 3.10 they install nothing: matplotlib pulls in
-# Pillow, whose security fixes (13.0.0 and later) no longer support 3.10. The
-# package itself still supports 3.10.
+# The validation and docs extras and the validation dependency group are marked
+# for Python 3.11.5+, and the assets group for 3.11+, so on older Pythons they
+# install nothing. matplotlib pulls in Pillow, whose security fixes (13.0.0 and
+# later) no longer support 3.10. jupyter and pydata-sphinx-theme depend on
+# soupsieve, whose fixed releases need 3.11.5. The other entries of each extra
+# carry the same marker so that an extra installs whole or not at all (sphinx
+# without the theme would break the docs build). The package itself still
+# supports 3.10.
 validation = [
-    "jupyter>=1.0; python_version >= '3.11'",
-    "matplotlib>=3.7; python_version >= '3.11'",
-    "tqdm>=4.60; python_version >= '3.11'",
+    "jupyter>=1.0; python_full_version >= '3.11.5'",
+    "matplotlib>=3.7; python_full_version >= '3.11.5'",
+    "tqdm>=4.60; python_full_version >= '3.11.5'",
 ]
 docs = [
-    "sphinx>=8.0",
-    "pydata-sphinx-theme>=0.16",
-    "myst-parser>=4.0",
+    "sphinx>=8.0; python_full_version >= '3.11.5'",
+    "pydata-sphinx-theme>=0.16; python_full_version >= '3.11.5'",
+    "myst-parser>=4.0; python_full_version >= '3.11.5'",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -86,11 +90,12 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
-# Python 3.11+ only; see [project.optional-dependencies].
+# validation: Python 3.11.5+ only; assets: 3.11+ only. See
+# [project.optional-dependencies].
 validation = [
-    "jupyter>=1.0; python_version >= '3.11'",
-    "matplotlib>=3.7; python_version >= '3.11'",
-    "tqdm>=4.60; python_version >= '3.11'",
+    "jupyter>=1.0; python_full_version >= '3.11.5'",
+    "matplotlib>=3.7; python_full_version >= '3.11.5'",
+    "tqdm>=4.60; python_full_version >= '3.11.5'",
 ]
 assets = [
     "matplotlib>=3.7; python_version >= '3.11'",

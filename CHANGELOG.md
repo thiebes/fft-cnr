@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `scripts/validate_record_width.py` prints the fit-path median to three
   decimals.
+- The `docs` and `validation` extras and the `validation` dependency group
+  install only on Python 3.11.5 and later. jupyter and pydata-sphinx-theme
+  depend on soupsieve, and its releases with fixes for three denial-of-service
+  advisories need Python 3.11.5. The lockfile no longer holds soupsieve 2.10.
+  The package itself still supports Python 3.10.
 
 ### Documentation
 
