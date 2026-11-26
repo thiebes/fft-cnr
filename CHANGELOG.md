@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `scripts/validate_template_neighbour.py`: the shift of the matched-filter
-  amplitude caused by a neighbouring Gaussian, on the full record and with
-  `roi` at +/-3 SD around the target.
+- `scripts/validate_template_neighbor.py`: the shift of the matched-filter
+  amplitude caused by a neighboring Gaussian, against separation, width, and
+  record length, on the full record and with `roi` at +/-3 SD around the
+  target, and the window's cost in amplitude scatter.
 
 ### Changed
 
@@ -20,11 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- README "Matched filter": a second feature inside the window shifts the
-  matched-filter amplitude in proportion to its own height, because the
-  template is mean-subtracted. Explicit `roi` bounds that exclude a neighbour
-  6 SD or more away remove the shift; a neighbour whose tail stays inside the
-  window is not removed, and the shorter window can make the shift larger.
+- README "Amplitude estimation": a second feature in the profile shifts the
+  matched-filter amplitude in proportion to the area under it, because the
+  template is mean-subtracted. For a neighbor of equal height 6 SD or more
+  away, explicit `roi` bounds at +/-3 SD around the target leave a shift under
+  0.1% of the target's peak, at 1.5 to 1.6 times the scatter of the amplitude.
+  A neighbor whose tail reaches into the window is not excluded, and the window
+  can make its shift larger.
 - README "Profile length": the record-width figures for the generalized
   Gaussian fit come from 6000 profiles per condition
   (`scripts/validate_record_width.py --trials 2000`). The median is within
