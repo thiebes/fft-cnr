@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   amplitude caused by a neighboring Gaussian, against separation, width, and
   record length, on the full record and with `roi` at +/-3 SD around the
   target, and the window's cost in amplitude scatter.
+- `scripts/validate_roi_auto.py`: the width of the `roi="auto"` window, and
+  the amplitude of the peak method with and without it, beside explicit bounds
+  and the matched filter.
 
 ### Changed
 
@@ -33,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.1% of the target's peak, at 1.5 to 1.6 times the scatter of the amplitude.
   A neighbor whose tail reaches into the window is not excluded, and the window
   can make its shift larger.
+- README "Low-frequency baseline and structured background": the `roi="auto"`
+  window (about 2.2 to 3 FWHM) is too narrow for the peak method's edge
+  baseline. For a Gaussian of SD 10 to 40 samples at CNR 20, the peak method
+  reads 12% to 16% low with it, against within 2% on the full record. Explicit
+  bounds at least 5.4 FWHM wide, or the matched filter, read within 1%.
 - README "Profile length": the record-width figures for the generalized
   Gaussian fit come from 6000 profiles per condition
   (`scripts/validate_record_width.py --trials 2000`). The median is within
